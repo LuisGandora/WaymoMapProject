@@ -1,4 +1,4 @@
-"""External calls for a stop: Places + Wikipedia facts, Gemini script, ElevenLabs MP3. Backend only."""
+"""External calls for a stop: Places + Wikipedia facts, gpt-oss-120b script, ElevenLabs MP3. Backend only."""
 import httpx
 
 from . import config
@@ -35,14 +35,13 @@ def wiki_near(lat, lng):
 
 
 def script(stop, lang):
-    """~20 s spoken script in `lang`, grounded only in the facts we hand Gemini."""
-    from google import genai
+    """~20 s spoken script in `lang`, grounded only in the facts we hand the LLM."""
+    from . import llm
 
     facts = {"street": stop["street"], "tags": stop["tags"], "place": stop.get("place"), "wikipedia": stop.get("wiki")}
     prompt = (f"Write a spoken tour-guide script of about 50 words in {config.LANGS[lang]} for a passenger in a robotaxi "
               f"passing this spot in Miami. Use ONLY these facts, invent nothing: {facts}. Output only the script.")
-    r = genai.Client(api_key=config.GEMINI_KEY).models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
-    return r.text.strip()
+    return llm.complete([{"role": "user", "content": prompt}])
 
 
 def tts(text, out_path):

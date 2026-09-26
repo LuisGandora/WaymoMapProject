@@ -1,6 +1,6 @@
 # Server (FastAPI backend + data pipeline)
 
-Turns Street View frames scored by Gemini into a scenic street map, builds time-budgeted loop tours inside Waymo's service area, and serves them (with ElevenLabs audio) to the frontend.
+Turns Street View frames scored by gpt-oss-120b into a scenic street map, builds time-budgeted loop tours inside Waymo's service area, and serves them (with ElevenLabs audio) to the frontend.
 
 ## Quickstart
 
@@ -26,11 +26,11 @@ uvicorn app.main:app --reload        # http://localhost:8000/docs
 
 Try it: `POST /route` with `{"mood": "murals+sunset", "minutes": 30, "start": "wynwood"}`.
 
-**The real pipeline** (needs `GOOGLE_API_KEY` + `GEMINI_API_KEY`): same as above but replace `score --fake` with
+**The real pipeline** (needs `GOOGLE_MAPS_API_KEY` + `LLM_API_KEY`): same as above but replace `score --fake` with
 
 ```powershell
 python -m pipeline.streetview        # downloads frames (costs money, resumable)
-python -m pipeline.score             # Gemini rates each frame (costs money, resumable)
+python -m pipeline.score             # gpt-oss-120b rates each frame (costs money, resumable)
 ```
 
 Start with `python -m pipeline.sample --hood wynwood --limit 500` to test cheaply.
@@ -50,10 +50,10 @@ Then `GET /tour/murals_sunset-30-wynwood` is a pure file/DB read: no live API ca
 ```
 service_area.geojson --> graph.py (OSM, no highways) --> graph.graphml
      sample.py --> points.json --> streetview.py --> media/frames/*.jpg
-                              --> score.py (Gemini) --> frames.json --> rollup.py --> segments.json
+                              --> score.py (gpt-oss-120b) --> frames.json --> rollup.py --> segments.json
      segments.json + graph --> matrix.py --> matrix_<mood>.json
      POST /route: matrix + segments + graph --> tour --> data/tours/<id>.json (+ Mongo)
-                  background: Places/Wikipedia + Gemini script + ElevenLabs --> media/audio/*.mp3
+                  background: Places/Wikipedia + gpt-oss-120b script + ElevenLabs --> media/audio/*.mp3
      GET /tour/{id}: reads the stored tour. Nothing else.
 ```
 
@@ -80,13 +80,14 @@ Interactive docs at `/docs`.
 
 | File | What it is |
 |---|---|
-| `app/config.py` | All env vars, paths, and the constants everyone shares: `MOODS` (mood to Gemini tags), `HOODS` (demo neighborhood bbox + loop start), `LANGS`, `TAGS`, `SPEED_FACTOR`. Change moods/neighborhoods here. |
+| `app/config.py` | All env vars, paths, and the constants everyone shares: `MOODS` (mood to tags), `HOODS` (demo neighborhood bbox + loop start), `LANGS`, `TAGS`, `SPEED_FACTOR`. Change moods/neighborhoods here. |
+| `app/llm.py` | LiteLLM OpenAI-compatible client for gpt-oss-120b. Ranking and tour scripts both go through here. |
 | `app/graph.py` | Loads the drivable street graph. Uses `data/graph.graphml` if present, else pulls OSM inside the polygon and saves it. Highways are excluded by an *inclusion* filter of road classes (primary down to residential), so motorway/trunk/service roads are never in the graph. Applies `SPEED_FACTOR` to travel times. |
 | `app/router.py` | Pure route logic, no I/O. `top_candidates` picks the best-scored segments for a mood (>= 250 m apart); `build_loop` does cheapest insertion by `score / added_minutes` until the time budget is used. Tested by `test_router.py`. |
 | `app/tour.py` | Builds a tour from `segments.json` + `matrix_<mood>.json` + the graph: route, real path geometry via Dijkstra, ride-mode frames, stops. `narrate_tour` fills script + audio per stop. Tour id = `<mood>-<minutes>-<start>`, and an existing id is returned instead of rebuilt. |
-| `app/narrate.py` | The external calls for a stop: Places (nearby business rated >= 4.0), Wikipedia (nearest article), Gemini (20 s script, told to use only the given facts), ElevenLabs (`eleven_multilingual_v2` MP3). |
+| `app/narrate.py` | The external calls for a stop: Places (nearby business rated >= 4.0), Wikipedia (nearest article), gpt-oss-120b (20 s script, told to use only the given facts), ElevenLabs (`eleven_multilingual_v2` MP3). |
 | `app/store.py` | Saves/loads tours. Always writes `data/tours/<id>.json`; also mirrors to Mongo (`waymotour.tours`) when `MONGO_URI` is set, and reads Mongo first. Stops are embedded in the tour document, not a separate collection, so `/tour/{id}` is one read. |
-| `app/main.py` | The FastAPI app: endpoints above, CORS from `CORS_ORIGINS`, static media. Narration only runs if Gemini + ElevenLabs keys + voice id are set. |
+| `app/main.py` | The FastAPI app: endpoints above, CORS from `CORS_ORIGINS`, static media. Narration only runs if LLM + ElevenLabs keys + voice id are set. |
 
 ### Pipeline (`pipeline/`, run in this order, each is `python -m pipeline.<name>`)
 
@@ -95,7 +96,7 @@ Interactive docs at `/docs`.
 | `sample.py` | graph | `data/points.json` | ~100 m pieces inside the polygon, one heading each: travel direction +90° (out the right window; `--side left\|ahead` to change), plus `travel_heading` and `length_m`. `--hood` limits to demo neighborhoods, `--limit N` for smoke tests. |
 | `validate.py` | graph, `points.json` | (exit code) | Import checklist: polygon valid and ~50-70 sq mi, no motorway/trunk, strongly connected, travel times > 0, points inside polygon, median segment ~100 m. Run after `sample`. |
 | `streetview.py` | `points.json` | `data/media/frames/<id>.jpg` | Free metadata check first, so no-imagery spots cost nothing. Skips frames already downloaded. |
-| `score.py` | `points.json`, frames | `data/frames.json` | Gemini vision, JSON schema `{score 1-10, tags[]}`. Resumable, saves every 25. `--fake` invents scores (no keys). |
+| `score.py` | `points.json`, frames | `data/frames.json` | gpt-oss-120b, JSON `{score 1-10, tags[]}`. Resumable, saves every 25. `--fake` invents scores (no keys). |
 | `rollup.py` | `points.json`, `frames.json` | `data/segments.json` | Averages frame scores per segment, keeps the segment geometry. |
 | `matrix.py` | `segments.json`, graph | `data/matrix_<mood>.json` | Per mood: top-30 candidates + the demo starts, Dijkstra drive minutes between all pairs. The router looks times up here instead of running Dijkstra per request. |
 | `bake.py` | all of the above + keys | `data/tours/<id>.json`, `data/media/audio/*.mp3` | Builds a tour and narrates it in every language for the stage demo. |
@@ -109,7 +110,7 @@ Interactive docs at `/docs`.
 | `service_area.geojson` | traced from Waymo's launch-post map | tiny | yes | The **initial Jan 2026 launch area** (54 sq mi; Waymo says ~60), extracted from the map image and georeferenced against OSM highway junctions, ~50 m accuracy. It does not include the later Miami Beach / Hard Rock Stadium expansions. To change it, save a new polygon over this file, delete `graph.graphml`, rerun the pipeline. Say "traced from Waymo's published service map, approximate" on stage. |
 | `graph.graphml` | `graph.py` (first run) | ~20 MB | **no** | OSM street graph. Regenerated automatically; delete it to refetch (after changing the polygon or `ROADS`). |
 | `points.json` | `sample.py` | ~0.4 MB per 1.8k points | yes | Segment skeleton: ids (`u_v_i`), coordinates, heading, street name. |
-| `frames.json` | `score.py` | small | yes | Every scored frame: score + tags. The only thing Gemini's vision output lands in. |
+| `frames.json` | `score.py` | small | yes | Every scored frame: score + tags. The only thing the ranking model's output lands in. |
 | `segments.json` | `rollup.py` | small | yes | What the router and `/segments` read. Only scored segments exist. |
 | `matrix_<mood>.json` | `matrix.py` | ~35 kB each | yes | The drive-time "stash". Rebuild after re-scoring. |
 | `tours/<id>.json` | `/route`, `bake.py` | ~0.1-1 MB | yes | Stored tours, also the offline fallback for the demo. Delete one to force a rebuild. |
@@ -140,7 +141,7 @@ Service area traced from Waymo's published service map: approximate, not officia
 
 - The neighborhood boxes (`HOODS`) are rough. Wynwood, Little Havana, Overtown and the Design District are inside the traced polygon; **Little Haiti is not** (the polygon's north edge is ~NW 46th St), so don't pitch it as a stop.
 - ElevenLabs `eleven_multilingual_v2` may not support Haitian Creole. Test `ht` early and pick another voice/model or drop the language if the audio is wrong.
-- `GEMINI_MODEL` defaults to `gemini-2.5-flash`. If Google has retired it, set a current model in `.env`.
+- Ranking and scripts use `openai/gpt-oss-120b` via LiteLLM (`completion()`, OpenAI-shaped). Override with `LLM_MODEL` / `LLM_BASE_URL` in `.env`.
 - Google's Maps Platform terms restrict caching/storing Street View imagery and Places data. Keep it to the demo neighborhoods and don't publish the dataset.
 - Route times come from OSM speeds times `SPEED_FACTOR`; calibrate `SPEED_FACTOR` against a real ride time.
 - Sunset is approximated as waterfront + greenery tags (no sun position yet).

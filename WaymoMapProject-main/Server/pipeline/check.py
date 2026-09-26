@@ -1,4 +1,4 @@
-"""Places check on high Gemini scores. Updates data/frames.json; does not change score.
+"""Places check on high LLM scores. Updates data/frames.json; does not change score.
 
 python -m pipeline.check [--min-score 7] [--limit N]
 Reuse app.narrate.place_near. agree = a 4★+ place within 150 m; flag = none (look at the photo).
@@ -38,7 +38,7 @@ def main():
             continue
         row = by_id[f["id"]]
         row["place"] = place
-        row["check"] = "agree" if place else "flag"  # score stays Gemini's
+        row["check"] = "agree" if place else "flag"  # score stays the LLM's
         if place:
             agree += 1
             print(f"agree {f['id']}  {f['score']}/10  {place['name']} ({place['rating']}★)")
