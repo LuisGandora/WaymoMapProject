@@ -16,9 +16,15 @@ def main():
     segs = []
     for sid, fs in by_seg.items():
         p = pts[sid]
-        segs.append({**{k: p[k] for k in ("id", "u", "v", "i", "lat", "lng", "street", "line")},
-                     "score": round(sum(f["score"] for f in fs) / len(fs), 1),
-                     "tags": sorted({t for f in fs for t in f["tags"]} - {"nothing"})})
+        best = max(fs, key=lambda f: f["score"])
+        seg = {**{k: p[k] for k in ("id", "u", "v", "i", "lat", "lng", "street", "line")},
+               "score": round(sum(f["score"] for f in fs) / len(fs), 1),
+               "tags": sorted({t for f in fs for t in f["tags"]} - {"nothing"})}
+        if best.get("place"):
+            seg["place"] = best["place"]
+        if best.get("check"):
+            seg["check"] = best["check"]
+        segs.append(seg)
     (config.DATA / "segments.json").write_text(json.dumps(segs), encoding="utf-8")
     print(f"{len(segs)} segments -> data/segments.json")
 

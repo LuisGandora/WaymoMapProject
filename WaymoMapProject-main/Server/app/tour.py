@@ -92,12 +92,15 @@ def build(mood, minutes, start):
     for k in route[1:-1]:
         s = segs[k]
         idx = next((i for i, f in enumerate(frames) if f["segment"] == k), None)
-        stops.append({
+        stop = {
             "id": k, "lat": s["lat"], "lng": s["lng"], "street": s["street"], "score": s["score"], "tags": s["tags"],
             "frame_idx": idx, "photo": frames[idx]["url"] if idx is not None else None,
             "why": f"{s['street'] or 'This block'} scored {s['score']}/10" + (f" for {', '.join(s['tags'])}" if s["tags"] else ""),
             "script": {}, "audio": {},
-        })
+        }
+        if s.get("place"):
+            stop["place"] = s["place"]  # from pipeline.check; narrate_tour skips a second Places call
+        stops.append(stop)
     tour = {
         "id": tid, "mood": mood, "minutes": minutes, "start": start,
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
