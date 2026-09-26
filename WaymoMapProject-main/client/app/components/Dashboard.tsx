@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { createTour, type Tour } from "../lib/api";
+import { createTour, getTour, type LatLng, type RouteOption, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
 
 // ids must match Server/app/config.py (MOODS / MATRIX_MOODS, LANGS, HOODS) — GET /config returns the live list.
@@ -79,6 +79,9 @@ function Select<T extends string>({
 export default function Dashboard() {
   const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30 });
   const [tour, setTour] = useState<Tour | null>(null);
+  const [options, setOptions] = useState<RouteOption[]>([]); // the server's top routes for the last request
+  const [custom, setCustom] = useState<LatLng | null>(null); // start picked on the map; overrides the "Start From" list
+  const [picking, setPicking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof TourSettings>(k: K, v: TourSettings[K]) => setSettings((s) => ({ ...s, [k]: v }));
@@ -87,7 +90,22 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      setTour(await createTour(settings));
+      const r = await createTour({ ...settings, ...custom });
+      setOptions(r.options);
+      setTour(r.tour);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Pick another of the top routes: load it in full and show it.
+  async function choose(id: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      setTour(await getTour(id));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -158,7 +176,23 @@ export default function Dashboard() {
             >
               Start From
             </Label>
-            <Select value={settings.start} options={STARTS} onChange={(v) => set("start", v)} />
+            <Select value={settings.start} options={STARTS} onChange={(v) => { set("start", v); setCustom(null); }} />
+            <div className="mt-3 flex gap-3">
+              <button
+                onClick={() => setPicking((p) => !p)}
+                className={`h-11 flex-1 rounded-xl border text-[15px] transition ${
+                  picking ? "border-green-400/80 bg-green-500/15 text-green-300" : "border-slate-700/70 bg-[#060b18] text-slate-200 hover:border-slate-500"
+                }`}
+              >
+                {picking ? "Click the map… (cancel)" : custom ? "Change spot on map" : "Pick spot on map"}
+              </button>
+              {custom && (
+                <button onClick={() => { setCustom(null); setTour(null); }} className="h-11 rounded-xl border border-slate-700/70 bg-[#060b18] px-4 text-[15px] text-slate-300 hover:border-slate-500">
+                  Clear
+                </button>
+              )}
+            </div>
+            {custom && <p className="mt-2 text-[13px] text-slate-400">Starting from your chosen spot instead of the list.</p>}
           </section>
 
           <section>
@@ -191,6 +225,37 @@ export default function Dashboard() {
               })}
             </div>
           </section>
+
+          {options.length > 0 && (
+            <section>
+              <Label glyph={<svg viewBox="0 0 24 24" className={icon}><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>}>
+                Top {options.length} Routes
+              </Label>
+              <ol className="space-y-2.5">
+                {options.map((o) => {
+                  const active = tour?.id === o.id;
+                  return (
+                    <li key={o.id}>
+                      <button
+                        onClick={() => choose(o.id)}
+                        className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                          active ? "border-cyan-400/80 bg-cyan-500/15 shadow-[0_0_18px_rgba(34,211,238,0.18)]" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
+                        }`}
+                      >
+                        <div className="flex items-baseline justify-between text-[15px]">
+                          <span className="font-bold text-slate-100">#{o.rank} · {o.score}/10</span>
+                          <span className="text-slate-400">{o.drive_minutes} min · {o.distance_km} km</span>
+                        </div>
+                        <div className="mt-1 truncate text-[13px] text-slate-400">
+                          {o.stops} stops · to {o.end_street || "unnamed block"}{o.inside_pct < 100 ? ` · ${o.inside_pct}% in area` : ""}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          )}
         </div>
 
         <footer className="border-t border-slate-800/70 px-8 py-8">
@@ -209,7 +274,14 @@ export default function Dashboard() {
       </aside>
 
       <main className="relative flex-1 bg-[#030712] bg-[radial-gradient(rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]">
-        <MapPanel tour={tour} loading={loading} error={error} />
+        <MapPanel
+          tour={tour}
+          loading={loading}
+          error={error}
+          picking={picking}
+          custom={custom}
+          onPick={(p) => { setCustom(p); setPicking(false); setTour(null); setError(null); }}
+        />
       </main>
     </div>
   );

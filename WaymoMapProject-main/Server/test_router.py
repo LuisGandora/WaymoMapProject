@@ -11,6 +11,9 @@ assert route == ["s", "a", "s"] and total == 10, (route, total)  # b would push 
 route, total = router.build_loop(t, {"a": 9, "b": 8}, "s", ["a", "b"], 30)
 assert set(route) == {"s", "a", "b"} and total <= 30, (route, total)
 
+route, total = router.build_loop(t, {"a": 9, "b": 8}, "s", ["a", "b"], 30, end="b")  # fixed destination
+assert route[0] == "s" and route[-1] == "b" and "a" in route, route
+
 # 2) mood filter + spacing: adjacent pieces of one street collapse to one candidate
 segs = [{"id": i, "lat": 25.8 + i * 0.0001, "lng": -80.2, "score": 10 - i, "tags": ["mural"]} for i in range(3)]
 assert len(router.top_candidates(segs, ["mural"])) == 1

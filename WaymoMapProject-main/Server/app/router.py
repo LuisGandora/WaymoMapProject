@@ -24,12 +24,14 @@ def top_candidates(segments, tags, n=30, sep_m=250):
     return picked
 
 
-def build_loop(t, scores, start, candidates, budget):
-    """Insert candidates into [start, start] by best score / added minutes until the budget is used.
+def build_loop(t, scores, start, candidates, budget, end=None):
+    """Insert candidates into [start, end or start] by best score / added minutes until the budget is used.
 
     t(a, b): minutes to drive a -> b (including traversing b). Returns (route, total_minutes).
     """
-    route, total, left = [start, start], t(start, start), list(candidates)
+    end = end or start
+    left = [c for c in candidates if c != end]
+    route, total = [start, end], t(start, end)
     while True:
         best = None
         for c in left:

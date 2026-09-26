@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from shapely.geometry import mapping
+from shapely.geometry import Point, mapping
 
 from . import config, graph, store, tour
 
@@ -23,6 +23,8 @@ class RouteReq(BaseModel):
     minutes: int
     start: str = "wynwood"
     language: str = "en"
+    lat: float | None = None  # custom start (with lng); must be inside the service area
+    lng: float | None = None
 
 
 def _need_data(fn, *a):
@@ -54,6 +56,10 @@ def _segments_geojson():
 def _photos_geojson():
     """Every street piece that has a downloaded frame, scored or not: points.json geometry + the frame's sidecar json."""
     pts = json.loads((config.DATA / "points.json").read_text(encoding="utf-8"))
+    try:
+        scored = tour.segments()  # optional: score/description appear only if pipeline.score + rollup were run
+    except FileNotFoundError:
+        scored = {}
     feats = []
     for p in pts:
         frames = config.MEDIA / "frames"
@@ -64,7 +70,9 @@ def _photos_geojson():
         feats.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": p["line"]}, "properties": {
             "id": p["id"], "street": p["street"], "photo": f"/static/frames/{p['id']}.jpg",
             "lat": info.get("lat", p["lat"]), "lng": info.get("lng", p["lng"]), "heading": p["heading"],
-            "date": info.get("date"), "copyright": info.get("copyright")}})
+            "date": info.get("date"), "copyright": info.get("copyright"),
+            "score": (s := scored.get(p["id"], {})).get("score"), "tags": s.get("tags", []),
+            "why": tour.why(p["street"], s.get("score"), s.get("tags", []))}})
     return {"type": "FeatureCollection", "features": feats}
 
 
@@ -96,17 +104,21 @@ def segments(bbox: str | None = None):
 
 @app.post("/route")
 def route(req: RouteReq, bg: BackgroundTasks):
-    if req.mood not in config.MATRIX_MOODS or req.start not in config.HOODS or req.language not in config.LANGS:
+    custom = req.lat is not None and req.lng is not None
+    if req.mood not in config.MATRIX_MOODS or (not custom and req.start not in config.HOODS) or req.language not in config.LANGS:
         raise HTTPException(400, "unknown mood, start or language; see GET /config")
+    if custom and not graph.polygon().contains(Point(req.lng, req.lat)):
+        raise HTTPException(400, "start is outside the service area")
     if not 5 <= req.minutes <= 90:
         raise HTTPException(400, "minutes must be 5-90")
     try:
-        t = _need_data(tour.build, req.mood, req.minutes, req.start)
+        doc = _need_data(tour.build_options, req.mood, req.minutes, req.start, (req.lat, req.lng) if custom else None)
     except ValueError as e:
         raise HTTPException(422, str(e))
-    if CAN_NARRATE and req.language not in t["stops"][0]["audio"]:
-        bg.add_task(tour.narrate_tour, t["id"], req.language)  # audio appears on GET /tour/{id} as it is made
-    return {"tour_id": t["id"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}
+    best = doc["options"][0]["id"]
+    if CAN_NARRATE and req.language not in store.get(best)["stops"][0]["audio"]:
+        bg.add_task(tour.narrate_tour, best, req.language)  # only the top pick; others via POST /tour/{id}/narrate
+    return {"tour_id": best, "options": doc["options"]}
 
 
 @app.get("/tour/{tour_id}")

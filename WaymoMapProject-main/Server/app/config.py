@@ -12,6 +12,11 @@ MEDIA = DATA / "media"  # frames/*.jpg and audio/*.mp3, served at /static
 AREA = Path(os.getenv("SERVICE_AREA", DATA / "service_area.geojson"))
 GRAPH_FILE = DATA / "graph.graphml"
 
+
+def has_frame(seg_id) -> bool:
+    """A street piece only counts as a real tour location if its Street View frame is on disk."""
+    return (MEDIA / "frames" / f"{seg_id}.jpg").exists()
+
 # Do not name the Maps key GOOGLE_API_KEY: google-genai treats that as *its* key
 # and ignores GEMINI_API_KEY when both are set.
 GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY", "")

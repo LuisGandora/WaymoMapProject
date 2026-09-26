@@ -1,4 +1,4 @@
-"""Step 5: per mood, drive minutes between the top-30 segments and the demo starts -> data/matrix_<mood>.json.
+"""Step 5: per mood, drive minutes between the top candidate segments -> data/matrix_<mood>.json.
 
 python -m pipeline.matrix
 minutes[a][b] = time leaving a's exit node -> entering b, plus driving b's own street piece.
@@ -13,7 +13,7 @@ from app import config, graph, router
 def main():
     G = graph.get()
     segs = json.loads((config.DATA / "segments.json").read_text(encoding="utf-8"))
-    starts = {f"start:{h}": graph.nearest(G, *c["start"]) for h, c in config.HOODS.items()}
+    segs = [s for s in segs if config.has_frame(s["id"])]  # candidates must have a frame too
     for mood in config.MATRIX_MOODS:
         # 60 candidates per mood, not 30: tour.build() filters these down to the ones near the tour's
         # start (radius filter), so each neighborhood needs enough of its own blocks left to fill the
@@ -24,7 +24,6 @@ def main():
             continue
         nodes = {s["id"]: {"enter": s["u"], "exit": s["v"], "traverse": graph.best_edge(G, s["u"], s["v"])["travel_time"] / 60}
                  for s in cands}
-        nodes |= {k: {"enter": n, "exit": n, "traverse": 0} for k, n in starts.items()}
         dist = {x: nx.single_source_dijkstra_path_length(G, x, weight="travel_time") for x in {n["exit"] for n in nodes.values()}}
         minutes = {a: {b: round(dist[na["exit"]][nb["enter"]] / 60 + nb["traverse"], 2)
                        for b, nb in nodes.items() if nb["enter"] in dist[na["exit"]]} for a, na in nodes.items()}
