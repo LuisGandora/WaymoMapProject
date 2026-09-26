@@ -23,10 +23,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hood", nargs="*", choices=list(config.HOODS), default=[])
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--side", choices=["right", "left", "ahead"], default="right",
+                    help="camera direction relative to travel: a rider looks out the side window (default right)")
     args = ap.parse_args()
+    offset = {"right": 90, "left": -90, "ahead": 0}[args.side]
     areas = [box(*config.HOODS[h]["bbox"]) for h in args.hood]
 
-    G = graph.get()
+    G, poly = graph.get(), graph.polygon()
     edges = ox.graph_to_gdfs(G, nodes=False)
     pts = []
     for (u, v, _), e in edges.iterrows():
@@ -40,8 +43,12 @@ def main():
         for i in range(n):
             piece = substring(e.geometry, i / n, (i + 1) / n, normalized=True)
             a, b, mid = piece.coords[0], piece.coords[-1], piece.interpolate(0.5, normalized=True)
+            if not poly.contains(mid):
+                continue  # edge crosses the boundary (truncate_by_edge); keep only pieces truly inside
+            travel = bearing(a, b)
             pts.append({"id": f"{u}_{v}_{i}", "u": u, "v": v, "i": i, "lat": round(mid.y, 6), "lng": round(mid.x, 6),
-                        "heading": bearing(a, b), "street": name, "line": [[a[0], a[1]], [b[0], b[1]]]})
+                        "heading": (travel + offset) % 360, "travel_heading": travel, "length_m": round(e["length"] / n, 1),
+                        "street": name, "line": [[a[0], a[1]], [b[0], b[1]]]})
     pts = pts[: args.limit]
     (config.DATA / "points.json").write_text(json.dumps(pts), encoding="utf-8")
     print(f"{len(pts)} points -> data/points.json")

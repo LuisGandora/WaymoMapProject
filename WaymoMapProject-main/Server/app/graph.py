@@ -2,8 +2,11 @@
 import json
 from functools import lru_cache
 
+import geopandas as gpd
 import osmnx as ox
 from shapely.geometry import shape
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 from . import config
 
@@ -12,13 +15,23 @@ ROADS = '["highway"~"^(primary|secondary|tertiary|unclassified|residential|livin
 
 
 def polygon():
-    gj = json.loads(config.AREA.read_text())
-    geom = gj["features"][0]["geometry"] if gj["type"] == "FeatureCollection" else gj
-    return shape(geom)
+    """Service area as one valid (Multi)Polygon, EPSG:4326. Hand-traced shapes often self-intersect."""
+    gj = json.loads(config.AREA.read_text(encoding="utf-8"))
+    feats = gj["features"] if gj["type"] == "FeatureCollection" else [gj]
+    geom = unary_union([shape(f["geometry"]) for f in feats])  # disconnected traces -> MultiPolygon
+    return geom if geom.is_valid else make_valid(geom).buffer(0)
+
+
+def area_sq_miles(geom):
+    gs = gpd.GeoSeries([geom], crs="EPSG:4326")
+    return float(gs.to_crs(gs.estimate_utm_crs()).area.iloc[0] / 2_589_988)
 
 
 def build():
-    G = ox.graph_from_polygon(polygon(), custom_filter=ROADS, simplify=True)
+    # truncate_by_edge keeps streets that cross the boundary; strongest component so every node
+    # is reachable both ways (removing one-ways can strand fragments, and loops need A->B->A).
+    G = ox.graph_from_polygon(polygon(), custom_filter=ROADS, simplify=True, truncate_by_edge=True)
+    G = ox.truncate.largest_component(G, strongly=True)
     G = ox.routing.add_edge_speeds(G)
     G = ox.routing.add_edge_travel_times(G)
     config.GRAPH_FILE.parent.mkdir(parents=True, exist_ok=True)

@@ -6,8 +6,9 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from shapely.geometry import mapping
 
-from . import config, store, tour
+from . import config, graph, store, tour
 
 config.MEDIA.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Waymo Tour API")
@@ -49,10 +50,24 @@ def _segments_geojson():
          "properties": {"id": s["id"], "score": s["score"], "tags": s["tags"], "street": s["street"]}} for s in segs]}
 
 
+@app.get("/service-area")
+def service_area():
+    """The traced Waymo polygon as a GeoJSON Feature, for the frontend outline layer."""
+    return {"type": "Feature", "properties": {}, "geometry": mapping(graph.polygon())}
+
+
 @app.get("/segments")
-def segments():
-    """Scored ~100 m street pieces as GeoJSON, for the green-to-gray heat map."""
-    return _need_data(_segments_geojson)
+def segments(bbox: str | None = None):
+    """Scored ~100 m street pieces as GeoJSON, for the green-to-gray heat map. bbox=minLng,minLat,maxLng,maxLat."""
+    fc = _need_data(_segments_geojson)
+    if not bbox:
+        return fc
+    try:
+        x0, y0, x1, y1 = map(float, bbox.split(","))
+    except ValueError:
+        raise HTTPException(400, "bbox must be minLng,minLat,maxLng,maxLat")
+    hit = lambda f: any(x0 <= x <= x1 and y0 <= y <= y1 for x, y in f["geometry"]["coordinates"])  # endpoints only
+    return {"type": "FeatureCollection", "features": [f for f in fc["features"] if hit(f)]}
 
 
 @app.post("/route")

@@ -1,6 +1,3 @@
-NOTE: Service_area.geojson is not really real info
-
-
 # Server (FastAPI backend + data pipeline)
 
 Turns Street View frames scored by Gemini into a scenic street map, builds time-budgeted loop tours inside Waymo's service area, and serves them (with ElevenLabs audio) to the frontend.
@@ -47,7 +44,6 @@ python -m pipeline.bake --mood murals+sunset --minutes 30 --start wynwood
 
 Then `GET /tour/murals_sunset-30-wynwood` is a pure file/DB read: no live API calls.
 
-Before doing anything real, replace the placeholder polygon (see `data/service_area.geojson` below).
 
 ## Data flow
 
@@ -67,7 +63,8 @@ service_area.geojson --> graph.py (OSM, no highways) --> graph.graphml
 |---|---|
 | `GET /health` | `{ok, narration, mongo}`: whether narration keys / Mongo are configured |
 | `GET /config` | moods, languages, start neighborhoods (feed the pickers) |
-| `GET /segments` | scored ~100 m street pieces as GeoJSON (`score`, `tags`, `street`) for the green-to-gray map |
+| `GET /service-area` | the traced polygon as a GeoJSON Feature (outline layer) |
+| `GET /segments?bbox=minLng,minLat,maxLng,maxLat` | scored ~100 m street pieces as GeoJSON (`score`, `tags`, `street`) for the green-to-gray map; `bbox` optional |
 | `POST /route` `{mood, minutes, start, language}` | builds (or returns the cached) loop; starts narration in `language` in the background. Returns `{tour_id, path, stops, summary}` |
 | `GET /tour/{id}` | full tour: `path` (GeoJSON LineString, lng/lat), `frames[]` for ride mode, `stops[]` (with `frame_idx`, `script{lang}`, `audio{lang}`), `summary`. Poll it while audio generates |
 | `POST /tour/{id}/narrate?lang=es` | language toggle: generate another language, then poll `GET /tour/{id}` |
@@ -94,7 +91,8 @@ Interactive docs at `/docs`.
 
 | Script | Reads | Writes | Notes |
 |---|---|---|---|
-| `sample.py` | graph | `data/points.json` | ~100 m pieces, one heading each (along the street). `--hood` limits to demo neighborhoods, `--limit N` for smoke tests. |
+| `sample.py` | graph | `data/points.json` | ~100 m pieces inside the polygon, one heading each: travel direction +90° (out the right window; `--side left\|ahead` to change), plus `travel_heading` and `length_m`. `--hood` limits to demo neighborhoods, `--limit N` for smoke tests. |
+| `validate.py` | graph, `points.json` | (exit code) | Import checklist: polygon valid and ~50-70 sq mi, no motorway/trunk, strongly connected, travel times > 0, points inside polygon, median segment ~100 m. Run after `sample`. |
 | `streetview.py` | `points.json` | `data/media/frames/<id>.jpg` | Free metadata check first, so no-imagery spots cost nothing. Skips frames already downloaded. |
 | `score.py` | `points.json`, frames | `data/frames.json` | Gemini vision, JSON schema `{score 1-10, tags[]}`. Resumable, saves every 25. `--fake` invents scores (no keys). |
 | `rollup.py` | `points.json`, `frames.json` | `data/segments.json` | Averages frame scores per segment, keeps the segment geometry. |
@@ -107,7 +105,7 @@ Interactive docs at `/docs`.
 
 | File | Made by | Size | In git? | Notes |
 |---|---|---|---|---|
-| `service_area.geojson` | you, by hand | tiny | yes | **Currently a rough PLACEHOLDER**, not Waymo's shape. Open Waymo's published map next to geojson.io, trace ~30-50 points, save over this file, delete `graph.graphml`, rerun the pipeline. Say "traced from Waymo's published service map, approximate" in the README and on stage. |
+| `service_area.geojson` | traced from Waymo's launch-post map | tiny | yes | The **initial Jan 2026 launch area** (54 sq mi; Waymo says ~60), extracted from the map image and georeferenced against OSM highway junctions, ~50 m accuracy. It does not include the later Miami Beach / Hard Rock Stadium expansions. To change it, save a new polygon over this file, delete `graph.graphml`, rerun the pipeline. Say "traced from Waymo's published service map, approximate" on stage. |
 | `graph.graphml` | `graph.py` (first run) | ~20 MB | **no** | OSM street graph. Regenerated automatically; delete it to refetch (after changing the polygon or `ROADS`). |
 | `points.json` | `sample.py` | ~0.4 MB per 1.8k points | yes | Segment skeleton: ids (`u_v_i`), coordinates, heading, street name. |
 | `frames.json` | `score.py` | small | yes | Every scored frame: score + tags. The only thing Gemini's vision output lands in. |
@@ -133,9 +131,13 @@ Interactive docs at `/docs`.
 5. Set `CORS_ORIGINS` to your Vercel and domain origins.
 6. Mongo Atlas: add the droplet's IP to the Atlas network allowlist, put the URI in `MONGO_URI`.
 
+## Attribution
+
+Service area traced from Waymo's published service map: approximate, not official. Street data © OpenStreetMap contributors (ODbL).
+
 ## Known limits and things to verify
 
-- The polygon and neighborhood boxes (`HOODS`) are rough. Check that Wynwood and Little Havana (and Overtown / Little Haiti, if you use that pitch) are inside your traced polygon.
+- The neighborhood boxes (`HOODS`) are rough. Wynwood, Little Havana, Overtown and the Design District are inside the traced polygon; **Little Haiti is not** (the polygon's north edge is ~NW 46th St), so don't pitch it as a stop.
 - ElevenLabs `eleven_multilingual_v2` may not support Haitian Creole. Test `ht` early and pick another voice/model or drop the language if the audio is wrong.
 - `GEMINI_MODEL` defaults to `gemini-2.5-flash`. If Google has retired it, set a current model in `.env`.
 - Google's Maps Platform terms restrict caching/storing Street View imagery and Places data. Keep it to the demo neighborhoods and don't publish the dataset.
