@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from shapely.geometry import mapping
+from shapely.geometry import Point, mapping
 
 from . import config, graph, safety, store, tour
 
@@ -36,6 +36,10 @@ class RouteReq(BaseModel):
     start: str = "wynwood"
     language: str = "en"
     safe: bool = False  # route between stops on the road-safety weights (see app/safety.py)
+    start_lat: float | None = None  # a start the user picked on the map (both or neither); must be inside the service area
+    start_lng: float | None = None
+    end_lat: float | None = None  # a destination picked on the map: makes it a one-way tour ending there
+    end_lng: float | None = None
 
 
 def _need_data(fn, *a):
@@ -140,10 +144,18 @@ def segments(bbox: str | None = None):
 def route(req: RouteReq, bg: BackgroundTasks):
     if req.mood not in _need_data(available_moods) or req.start not in _need_data(available_starts) or req.language not in config.LANGS:
         raise HTTPException(400, "that mood or start has no scored blocks yet; GET /config lists what's available")
-    if not 5 <= req.minutes <= 90:
-        raise HTTPException(400, "minutes must be 5-90")
+    if not 1 <= req.minutes <= 90:
+        raise HTTPException(400, "minutes must be 1-90")
+    at, to = (req.start_lat, req.start_lng), (req.end_lat, req.end_lng)
+    for name, pt in (("start", at), ("end", to)):
+        if (pt[0] is None) != (pt[1] is None):
+            raise HTTPException(400, f"{name}_lat and {name}_lng go together")
+    at, to = (at if at[0] is not None else None), (to if to[0] is not None else None)
+    for name, pt in (("start", at), ("end", to)):
+        if pt and not graph.polygon().contains(Point(pt[1], pt[0])):
+            raise HTTPException(400, f"the {name} point is outside the Waymo service area")
     try:
-        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe)
+        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe, at, to)
     except ValueError as e:
         raise HTTPException(422, str(e))
     if not t["stops"]:

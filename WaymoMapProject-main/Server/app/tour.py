@@ -40,65 +40,88 @@ def _frames_on(a, b):
             yield {"lat": s["lat"], "lng": s["lng"], "url": f"/static/frames/{s['id']}.jpg", "segment": s["id"]}
 
 
-def tour_id(mood, minutes, start, safe=False):
-    return f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "")
+def tour_id(mood, minutes, start, safe=False, at=None, to=None):
+    return (f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "")
+            + (f"-from{at[0]:.4f}_{at[1]:.4f}" if at else "") + (f"-to{to[0]:.4f}_{to[1]:.4f}" if to else ""))
 
 
-def build(mood, minutes, start, safe=False):
-    """Same (mood, minutes, start, safe) returns the stored tour instead of rebuilding.
+@lru_cache
+def _frame_points():
+    """Street pieces whose Street View frame is on disk: the only places a tour may start or end."""
+    return [p for p in _load("points.json") if config.has_frame(p["id"])]
 
-    safe=True draws the road between stops on the road-safety weights (see app/safety.py): off High Injury Network
-    corridors, off big arterials, around live closures, and out of flood zones while a flood alert is active.
-    Stop selection is the same either way; only the streets driven between stops change. Every tour, safe or not,
-    gets a safety score in its summary, plus the fastest-route comparison so the UI can say "+2 min, -1.3 km on
-    high-injury corridors".
+
+def snap(lat, lng, max_m=250):
+    """The photo-backed street piece nearest (lat, lng), or ValueError if none is within max_m."""
+    p = min(_frame_points(), key=lambda p: router.haversine_m((lat, lng), (p["lat"], p["lng"])))
+    if router.haversine_m((lat, lng), (p["lat"], p["lng"])) > max_m:
+        raise ValueError("no photo-covered street near that spot; pick a spot closer to a photographed street")
+    return p
+
+
+def build(mood, minutes, start, safe=False, at=None, to=None):
+    """Same (mood, minutes, start, safe, at, to) returns the stored tour instead of rebuilding.
+
+    at=(lat, lng) starts from a spot the user picked instead of the neighborhood's default start; to=(lat, lng) is the
+    destination the user picked (otherwise the most scenic block within reach is chosen).
+    Both snap to the nearest photographed street. With `to`, the path is exactly the road from the start to the
+    destination (nothing before the start, nothing after the end, no detours); the time budget is a ceiling on it.
     """
-    tid = tour_id(mood, minutes, start, safe)
-    if existing := store.get(tid):
+    tid = tour_id(mood, minutes, start, safe, at, to)
+    if (existing := store.get(tid)) and "summary" in existing and existing.get("dest_id"):  # older cached docs (loops): rebuild
         return existing
     M, segs, G = matrix(mood), segments(), graph.get()
     wx, live = safety.weather(), safety.closures()
     safety.apply(G, alert=wx["flood"], closures=live)
     weight = "safe_time" if safe else "travel_time"
-    nodes, k0 = M["nodes"], f"start:{start}"
-    # --- Radius filter ---------------------------------------------------------------------------
-    # Problem: the matrix holds the best-scored blocks for this mood across EVERY scored neighborhood.
-    # Once the router has used up the blocks near the start and still has minutes left, the only
-    # candidates remaining are far away, so it drives across the city for one or two more stops
-    # (e.g. a Wynwood tour crossing the Miami River for two Little Havana blocks).
-    # Fix: a tour may only use blocks within a radius of its start point. The radius grows with the
-    # time budget: 15 min -> 1.5 km, 30 min -> 2.2 km, 45 min -> 2.8 km. Wynwood and Little Havana are
-    # 3.3 km apart, so at these sizes a tour always stays in the neighborhood it started in.
-    origin = config.HOODS[start]["start"]                    # (lat, lng) of the loop's start point
-    radius_m = 800 + 45 * minutes                             # metres; the formula above
-    cands = [
-        k for k in nodes                                      # every candidate block in the matrix
-        if k in segs                                          # ...that is a scored street piece (not a start node)
-        and router.haversine_m(origin, (segs[k]["lat"], segs[k]["lng"])) <= radius_m  # ...within reach
-    ]
-    # ----------------------------------------------------------------------------------------------
-    stop_score = {k: segs[k]["score"] * (safety.stop_factor(segs[k]) if safe else 1.0) for k in cands}
-    route, total = router.build_loop(lambda a, b: M["minutes"][a].get(b, router.INF), stop_score, k0, cands, minutes)
-    if len(route) == 2:
-        raise ValueError("no scored stops fit this mood and time budget")
+    nodes = dict(M["nodes"])
+    o = snap(*(at or config.HOODS[start]["start"]))
+    K0 = "start"
+    nodes[K0] = {"enter": o["u"], "exit": o["u"], "traverse": 0}
+    minutes_of = lambda es: sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) / 60  # real minutes on the drawn road
 
     def drive(w):
-        edges, cur = [], nodes[k0]["exit"]
+        edges, cur = [], o["u"]
         for k in route[1:]:
-            p = nx.shortest_path(G, cur, nodes[k]["enter"], weight=w)
+            try:
+                p = nx.shortest_path(G, cur, nodes[k]["enter"], weight=w)
+            except nx.NetworkXNoPath:
+                raise ValueError("no drivable route between the start and that spot")
             edges += zip(p, p[1:])
-            if k in segs:
+            if k in segs and nodes[k]["enter"] != nodes[k]["exit"]:
                 edges.append((nodes[k]["enter"], nodes[k]["exit"]))
             cur = nodes[k]["exit"]
         return edges
 
-    minutes_of = lambda es: sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) / 60  # real minutes on the drawn road
+    # Every tour is one-way and simple: exactly the road from the start to the destination. Nothing before the
+    # start, nothing after the destination, no detours, and a shortest path never revisits a spot, so no cycles.
+    if to:
+        e = snap(*to)
+        if e["id"] not in segs:
+            raise ValueError("that end point is on a street with no scenic score; pick another")
+    else:
+        # No destination picked: a scenic block for this mood that the road reaches with time to spare.
+        fwd = nx.single_source_dijkstra_path_length(G, o["u"], weight="travel_time")
+        want = config.mood_tags(mood)  # None = any
+        reach = [k for k, g in segs.items() if k != o["id"] and config.has_frame(k) and (want is None or set(want) & set(g["tags"]))
+                 and fwd.get(g["u"], router.INF) / 60 <= 0.85 * minutes]
+        if not reach:
+            raise ValueError("no scenic block for this mood is within reach of the start in that time; try more minutes or another mood")
+        # The budget sets how far: best-scored block 50-85% of it away; if the scored area is smaller than that,
+        # the best of the five farthest.
+        mins = lambda k: fwd[segs[k]["u"]] / 60
+        pool = [k for k in reach if mins(k) >= 0.5 * minutes] or sorted(reach, key=mins)[-5:]
+        e = segs[max(pool, key=lambda k: (segs[k]["score"], mins(k)))]
+    if e["u"] == o["u"]:
+        raise ValueError("the start and the destination are the same spot")
+    END = e["id"]
+    nodes[END] = {"enter": e["u"], "exit": e["u"], "traverse": 0}  # the path stops at the block's near end
+    route = [K0, END]
     edges = drive(weight)
-    while minutes_of(edges) > minutes * 1.1 and len(route) > 3:  # the safer road is longer; drop the weakest stop until it fits
-        route.remove(min(route[1:-1], key=lambda k: segs[k]["score"]))
-        edges = drive(weight)
     fastest = drive("travel_time") if safe else edges
     total = minutes_of(edges)
+    if total > minutes:
+        raise ValueError(f"that destination is about {total:.0f} min from the start, more than your {minutes}-minute budget")
 
     coords, frames, dist = [], [], 0
     for a, b in edges:
@@ -108,13 +131,17 @@ def build(mood, minutes, start, safe=False):
         coords += pts[1:] if coords and coords[-1] == pts[0] else pts
         frames += _frames_on(a, b)
 
+    want = config.mood_tags(mood)  # the numbered stops are the best blocks the road passes; None = any
+    onpath = [k for k in dict.fromkeys(f["segment"] for f in frames) if k in segs and k not in (o["id"], END)]
+    ids = [k for k in onpath if want is None or set(want) & set(segs[k]["tags"])] or onpath
+    ids.append(END)
     stops = []
-    for k in route[1:-1]:
+    for k in ids:
         s = segs[k]
         idx = next((i for i, f in enumerate(frames) if f["segment"] == k), None)
         stop = {
             "id": k, "lat": s["lat"], "lng": s["lng"], "street": s["street"], "score": s["score"], "tags": s["tags"],
-            "frame_idx": idx, "photo": frames[idx]["url"] if idx is not None else None,
+            "frame_idx": idx, "photo": frames[idx]["url"] if idx is not None else (f"/static/frames/{k}.jpg" if config.has_frame(k) else None),
             "why": f"{s['street'] or 'This block'} scored {s['score']}/10" + (f" for {', '.join(s['tags'])}" if s["tags"] else ""),
             "script": {}, "audio": {},
         }
@@ -127,12 +154,14 @@ def build(mood, minutes, start, safe=False):
         fast_min = sum(graph.best_edge(G, a, b)["travel_time"] for a, b in fastest) / 60
         sc["vs_fastest"] = {"minutes": round(total - fast_min, 1), "hin_km": round(sc["hin_km"] - fast["hin_km"], 2),
                             "score": sc["score"] - fast["score"], "arterial_pct": sc["arterial_pct"] - fast["arterial_pct"]}
-        base = build(mood, minutes, start, safe=False)  # the same request with Safer Route off (cached after the first time)
+        base = build(mood, minutes, start, safe=False, at=at, to=to)  # the same request with Safer Route off (cached after the first time)
         if bs := base["summary"].get("safety"):
             sc["vs_default"] = {"minutes": round(total - base["summary"]["drive_minutes"], 1), "hin_km": round(sc["hin_km"] - bs["hin_km"], 2),
                                 "score": sc["score"] - bs["score"], "calm_pct": sc["calm_pct"] - bs["calm_pct"], "stops": len(stops) - base["summary"]["stops"]}
     tour = {
         "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe,
+        "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"], "photo": f"/static/frames/{o['id']}.jpg"},
+        "dest_id": END,  # the last stop; the path ends there
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
         "frames": frames, "stops": stops,
         "summary": {"distance_km": round(dist / 1000, 1), "drive_minutes": round(total, 1), "stops": len(stops), "businesses": [],

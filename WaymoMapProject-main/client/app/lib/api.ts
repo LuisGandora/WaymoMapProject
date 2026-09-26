@@ -16,6 +16,8 @@ export type Stop = {
   place?: { name: string; rating: number; type: string } | null;
 };
 
+export type LatLng = { lat: number; lng: number };
+
 export type Frame = { lat: number; lng: number; url: string; segment: string };
 
 export type Tour = {
@@ -27,6 +29,8 @@ export type Tour = {
   frames: Frame[];
   stops: Stop[];
   safe?: boolean;
+  origin?: { id: string; lat: number; lng: number; street: string; photo: string }; // the photographed street the tour starts on
+  dest_id?: string | null; // set for a one-way tour: that stop is the destination
   summary: {
     distance_km: number; drive_minutes: number; stops: number; businesses: string[];
     safety?: Safety | null;
@@ -34,7 +38,7 @@ export type Tour = {
   };
 };
 
-export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean };
+export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean; start_lat?: number; start_lng?: number; end_lat?: number; end_lng?: number };
 
 export type Safety = {
   score: number; grade: "A" | "B" | "C" | "D"; km: number; hin_km: number; hin_pct: number; arterial_pct: number; calm_pct: number;
@@ -72,4 +76,21 @@ export function highlights(tour: Tour): Stop[] {
   const n = Math.max(4, Math.round(tour.minutes / 4));
   const keep = new Set([...tour.stops].sort((a, b) => b.score - a.score).slice(0, n).map((s) => s.id));
   return tour.stops.filter((s) => keep.has(s.id));
+}
+
+// The stops the map numbers and the step bar walks through, in route order. A one-way tour always ends on its destination.
+export function navStops(tour: Tour): Stop[] {
+  const dest = tour.stops.find((s) => s.id === tour.dest_id);
+  const list = highlights(tour).filter((s) => s.id !== dest?.id);
+  return dest ? [...list, dest] : list;
+}
+
+// Straight-line direction and distance between two points, for "head NE, ~0.9 km to the next stop".
+export function leg(a: LatLng, b: LatLng): { dir: string; km: number } {
+  const r = Math.PI / 180;
+  const y = Math.sin((b.lng - a.lng) * r) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos((b.lng - a.lng) * r);
+  const dir = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][(Math.round((Math.atan2(y, x) / r) / 45) + 8) % 8];
+  const h = Math.sin(((b.lat - a.lat) * r) / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(((b.lng - a.lng) * r) / 2) ** 2;
+  return { dir, km: 2 * 6371 * Math.asin(Math.sqrt(h)) };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { createTour, getConfig, type Tour } from "../lib/api";
+import { createTour, getConfig, type LatLng, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
 
 // ids must match Server/app/config.py (MOODS / MATRIX_MOODS, LANGS, HOODS) — GET /config returns the live list.
@@ -27,13 +27,14 @@ export const STARTS = [
   { id: "little_havana", label: "Little Havana" },
 ] as const;
 
-export const DURATIONS = [15, 30, 45] as const;
+export const MIN_MINUTES = 1;
+export const MAX_MINUTES = 30;
 
 export type TourSettings = {
   mood: (typeof MOODS)[number]["id"];
   language: (typeof LANGUAGES)[number]["id"];
   start: (typeof STARTS)[number]["id"];
-  minutes: (typeof DURATIONS)[number];
+  minutes: number; // MIN_MINUTES..MAX_MINUTES
   safe: boolean;
 };
 
@@ -77,9 +78,33 @@ function Select<T extends string>({
   );
 }
 
+// "Pick on map" / "Clear" buttons for a start or destination the user sets by clicking the map.
+function PickRow({ kind, picking, set, onToggle, onClear }: { kind: "start" | "end"; picking: "start" | "end" | null; set: boolean; onToggle: () => void; onClear: () => void }) {
+  const active = picking === kind;
+  const tone = kind === "start" ? "border-green-400/80 bg-green-500/15 text-green-300" : "border-red-400/80 bg-red-500/15 text-red-300";
+  return (
+    <div className="mt-3 flex gap-3">
+      <button
+        onClick={onToggle}
+        className={`h-11 flex-1 rounded-xl border text-[15px] transition ${active ? tone : "border-slate-700/70 bg-[#060b18] text-slate-200 hover:border-slate-500"}`}
+      >
+        {active ? "Click the map… (cancel)" : set ? `Change ${kind === "start" ? "start" : "destination"}` : `Pick ${kind === "start" ? "start" : "destination"} on map`}
+      </button>
+      {set && (
+        <button onClick={onClear} className="h-11 rounded-xl border border-slate-700/70 bg-[#060b18] px-4 text-[15px] text-slate-300 hover:border-slate-500">
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30, safe: true });
   const [tour, setTour] = useState<Tour | null>(null);
+  const [startPt, setStartPt] = useState<LatLng | null>(null); // start / destination picked on the map (inside the service area)
+  const [endPt, setEndPt] = useState<LatLng | null>(null);
+  const [picking, setPicking] = useState<"start" | "end" | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof TourSettings>(k: K, v: TourSettings[K]) => setSettings((s) => ({ ...s, [k]: v }));
@@ -107,7 +132,13 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      setTour(await createTour(settings));
+      setTour(
+        await createTour({
+          ...settings,
+          ...(startPt && { start_lat: startPt.lat, start_lng: startPt.lng }),
+          ...(endPt && { end_lat: endPt.lat, end_lng: endPt.lng }),
+        }),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -178,7 +209,36 @@ export default function Dashboard() {
             >
               Start From
             </Label>
-            <Select value={settings.start} options={starts} onChange={(v) => set("start", v)} />
+            <Select value={settings.start} options={starts} onChange={(v) => { set("start", v); setStartPt(null); }} />
+            <PickRow
+              kind="start"
+              picking={picking}
+              set={!!startPt}
+              onToggle={() => setPicking((p) => (p === "start" ? null : "start"))}
+              onClear={() => { setStartPt(null); setTour(null); }}
+            />
+          </section>
+
+          <section>
+            <Label
+              glyph={
+                <svg viewBox="0 0 24 24" className={icon}>
+                  <path d="M4 22V4M4 4h13l-2 4 2 4H4" />
+                </svg>
+              }
+            >
+              Destination
+            </Label>
+            <PickRow
+              kind="end"
+              picking={picking}
+              set={!!endPt}
+              onToggle={() => setPicking((p) => (p === "end" ? null : "end"))}
+              onClear={() => { setEndPt(null); setTour(null); }}
+            />
+            <p className="mt-2 text-[13px] text-slate-400">
+              {endPt ? "One-way tour: start to your destination, past scenic blocks on the way." : "Not set: we pick the most scenic destination within your time budget."}
+            </p>
           </section>
 
           <section>
@@ -192,23 +252,18 @@ export default function Dashboard() {
             >
               Time Budget
             </Label>
-            <div className="grid grid-cols-3 gap-4">
-              {DURATIONS.map((m) => {
-                const active = settings.minutes === m;
-                return (
-                  <button
-                    key={m}
-                    onClick={() => set("minutes", m)}
-                    className={`h-[58px] rounded-2xl border text-[17px] transition ${
-                      active
-                        ? "border-cyan-400/80 bg-cyan-500/15 text-cyan-300 shadow-[0_0_18px_rgba(34,211,238,0.18)]"
-                        : "border-slate-700/70 bg-[#060b18] text-slate-200 hover:border-slate-500"
-                    }`}
-                  >
-                    {m} min
-                  </button>
-                );
-              })}
+            <div className="flex items-center gap-4">
+              <input
+                type="range"
+                min={MIN_MINUTES}
+                max={MAX_MINUTES}
+                step={1}
+                value={settings.minutes}
+                onChange={(e) => set("minutes", Number(e.target.value))}
+                className="h-2 flex-1 cursor-pointer accent-cyan-400"
+                aria-label="Time budget in minutes"
+              />
+              <span className="w-[72px] rounded-xl border border-cyan-400/60 bg-cyan-500/10 py-2 text-center text-[17px] font-bold text-cyan-300">{settings.minutes} min</span>
             </div>
           </section>
 
@@ -254,7 +309,21 @@ export default function Dashboard() {
       </aside>
 
       <main className="relative flex-1 bg-[#030712] bg-[radial-gradient(rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]">
-        <MapPanel tour={tour} loading={loading} error={error} />
+        <MapPanel
+          tour={tour}
+          loading={loading}
+          error={error}
+          picking={picking}
+          startPt={startPt}
+          endPt={endPt}
+          onPick={(p) => {
+            if (picking === "start") setStartPt(p);
+            else setEndPt(p);
+            setPicking(null);
+            setTour(null);
+            setError(null);
+          }}
+        />
       </main>
     </div>
   );
