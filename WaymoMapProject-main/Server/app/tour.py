@@ -4,7 +4,7 @@ from functools import lru_cache
 
 import networkx as nx
 
-from . import config, graph, narrate, router, store
+from . import config, graph, narrate, router, safety, store
 
 
 def _load(name):
@@ -40,16 +40,26 @@ def _frames_on(a, b):
             yield {"lat": s["lat"], "lng": s["lng"], "url": f"/static/frames/{s['id']}.jpg", "segment": s["id"]}
 
 
-def tour_id(mood, minutes, start):
-    return f"{mood.replace('+', '_')}-{minutes}-{start}"
+def tour_id(mood, minutes, start, safe=False):
+    return f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "")
 
 
-def build(mood, minutes, start):
-    """Same (mood, minutes, start) returns the stored tour instead of rebuilding."""
-    tid = tour_id(mood, minutes, start)
+def build(mood, minutes, start, safe=False):
+    """Same (mood, minutes, start, safe) returns the stored tour instead of rebuilding.
+
+    safe=True draws the road between stops on the road-safety weights (see app/safety.py): off High Injury Network
+    corridors, off big arterials, around live closures, and out of flood zones while a flood alert is active.
+    Stop selection is the same either way; only the streets driven between stops change. Every tour, safe or not,
+    gets a safety score in its summary, plus the fastest-route comparison so the UI can say "+2 min, -1.3 km on
+    high-injury corridors".
+    """
+    tid = tour_id(mood, minutes, start, safe)
     if existing := store.get(tid):
         return existing
     M, segs, G = matrix(mood), segments(), graph.get()
+    wx, live = safety.weather(), safety.closures()
+    safety.apply(G, alert=wx["flood"], closures=live)
+    weight = "safe_time" if safe else "travel_time"
     nodes, k0 = M["nodes"], f"start:{start}"
     # --- Radius filter ---------------------------------------------------------------------------
     # Problem: the matrix holds the best-scored blocks for this mood across EVERY scored neighborhood.
@@ -67,18 +77,28 @@ def build(mood, minutes, start):
         and router.haversine_m(origin, (segs[k]["lat"], segs[k]["lng"])) <= radius_m  # ...within reach
     ]
     # ----------------------------------------------------------------------------------------------
-    route, total = router.build_loop(lambda a, b: M["minutes"][a].get(b, router.INF),
-                                     {k: segs[k]["score"] for k in cands}, k0, cands, minutes)
+    stop_score = {k: segs[k]["score"] * (safety.stop_factor(segs[k]) if safe else 1.0) for k in cands}
+    route, total = router.build_loop(lambda a, b: M["minutes"][a].get(b, router.INF), stop_score, k0, cands, minutes)
     if len(route) == 2:
         raise ValueError("no scored stops fit this mood and time budget")
 
-    edges, cur = [], nodes[k0]["exit"]
-    for k in route[1:]:
-        p = nx.shortest_path(G, cur, nodes[k]["enter"], weight="travel_time")
-        edges += zip(p, p[1:])
-        if k in segs:
-            edges.append((nodes[k]["enter"], nodes[k]["exit"]))
-        cur = nodes[k]["exit"]
+    def drive(w):
+        edges, cur = [], nodes[k0]["exit"]
+        for k in route[1:]:
+            p = nx.shortest_path(G, cur, nodes[k]["enter"], weight=w)
+            edges += zip(p, p[1:])
+            if k in segs:
+                edges.append((nodes[k]["enter"], nodes[k]["exit"]))
+            cur = nodes[k]["exit"]
+        return edges
+
+    minutes_of = lambda es: sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) / 60  # real minutes on the drawn road
+    edges = drive(weight)
+    while minutes_of(edges) > minutes * 1.1 and len(route) > 3:  # the safer road is longer; drop the weakest stop until it fits
+        route.remove(min(route[1:-1], key=lambda k: segs[k]["score"]))
+        edges = drive(weight)
+    fastest = drive("travel_time") if safe else edges
+    total = minutes_of(edges)
 
     coords, frames, dist = [], [], 0
     for a, b in edges:
@@ -101,11 +121,22 @@ def build(mood, minutes, start):
         if s.get("place"):
             stop["place"] = s["place"]  # from pipeline.check; narrate_tour skips a second Places call
         stops.append(stop)
+    sc = safety.score(G, edges, alert=wx["flood"], closures=live)
+    if sc and safe:
+        fast = safety.score(G, fastest, alert=wx["flood"], closures=live)
+        fast_min = sum(graph.best_edge(G, a, b)["travel_time"] for a, b in fastest) / 60
+        sc["vs_fastest"] = {"minutes": round(total - fast_min, 1), "hin_km": round(sc["hin_km"] - fast["hin_km"], 2),
+                            "score": sc["score"] - fast["score"], "arterial_pct": sc["arterial_pct"] - fast["arterial_pct"]}
+        base = build(mood, minutes, start, safe=False)  # the same request with Safer Route off (cached after the first time)
+        if bs := base["summary"].get("safety"):
+            sc["vs_default"] = {"minutes": round(total - base["summary"]["drive_minutes"], 1), "hin_km": round(sc["hin_km"] - bs["hin_km"], 2),
+                                "score": sc["score"] - bs["score"], "calm_pct": sc["calm_pct"] - bs["calm_pct"], "stops": len(stops) - base["summary"]["stops"]}
     tour = {
-        "id": tid, "mood": mood, "minutes": minutes, "start": start,
+        "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe,
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
         "frames": frames, "stops": stops,
-        "summary": {"distance_km": round(dist / 1000, 1), "drive_minutes": round(total, 1), "stops": len(stops), "businesses": []},
+        "summary": {"distance_km": round(dist / 1000, 1), "drive_minutes": round(total, 1), "stops": len(stops), "businesses": [],
+                    "safety": sc, "weather": {"flood": wx["flood"], "storm": wx["storm"], "alerts": [a["event"] for a in wx["alerts"]]}},
     }
     store.save(tour)
     return tour

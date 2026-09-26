@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapLayerMouseEvent, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getPhotos, getSegments, getServiceArea, media, type Stop, type Tour } from "../lib/api";
+import { getHazards, getPhotos, getSegments, getServiceArea, media, type Stop, type Tour } from "../lib/api";
 
 export const MIAMI = { latitude: 25.7617, longitude: -80.1918 };
 
@@ -26,12 +26,26 @@ const segmentsLine: LayerProps = {
 // Streets that have a Street View frame (scored or not). Thin line for looks, wide invisible one so streets are easy to click.
 const photosLine: LayerProps = { id: "photos", type: "line", paint: { "line-color": "#94a3b8", "line-width": 1.5, "line-opacity": 0.5 } };
 const photosHit: LayerProps = { id: "photos-hit", type: "line", paint: { "line-width": 16, "line-opacity": 0 } };
+// Road-safety hazards: High Injury Network corridors (red dashes) and FEMA flood zones (faint blue).
+const hinLine: LayerProps = { id: "hin", type: "line", paint: { "line-color": "#ef4444", "line-width": 3, "line-dasharray": [2, 1.5], "line-opacity": 0.7 } };
+const floodFill: LayerProps = { id: "flood", type: "fill", paint: { "fill-color": "#3b82f6", "fill-opacity": 0.07 } };
+// Every killed/seriously-injured crash 2019-2023 as a dot; pedestrian-involved ones a little bigger.
+const ksiDots: LayerProps = {
+  id: "ksi",
+  type: "circle",
+  paint: {
+    "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, ["case", ["==", ["get", "ped"], 1], 2.5, 1.5], 15, ["case", ["==", ["get", "ped"], 1], 5, 3.5]],
+    "circle-color": ["case", ["==", ["get", "fatal"], 1], "#fb7185", "#f97316"],
+    "circle-opacity": 0.6,
+  },
+};
 const routeCasing: LayerProps = { id: "route-casing", type: "line", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#0e1628", "line-width": 9 } };
 const routeLine: LayerProps = { id: "route", type: "line", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#22d3ee", "line-width": 5 } };
 
 export default function TourMap({ tour }: { tour: Tour | null }) {
   const mapRef = useRef<MapRef>(null);
   const [area, setArea] = useState<GeoJSON.Feature | null>(null);
+  const [hazards, setHazards] = useState<{ hin: GeoJSON.FeatureCollection; flood: GeoJSON.FeatureCollection; ksi?: GeoJSON.FeatureCollection } | null>(null);
   const [segments, setSegments] = useState<GeoJSON.FeatureCollection | null>(null);
   const [photos, setPhotos] = useState<GeoJSON.FeatureCollection | null>(null);
   const [shot, setShot] = useState<{ lng: number; lat: number; p: Record<string, string | number | null> } | null>(null);
@@ -42,6 +56,7 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
   // Static layers, fetched once. Either failing just leaves that layer off; the map still renders.
   useEffect(() => {
     getServiceArea().then(setArea).catch((e) => console.warn("service area:", e));
+    getHazards().then(setHazards).catch((e) => console.warn("hazards:", e));
     getPhotos().then(setPhotos).catch((e) => console.warn("photos:", e));
     getSegments().then(setSegments).catch((e) => console.warn("segments:", e));
   }, []);
@@ -82,6 +97,21 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
           <Layer {...areaFill} />
           <Layer {...areaLine} />
         </Source>
+      )}
+      {hazards && (
+        <>
+          <Source id="flood" type="geojson" data={hazards.flood}>
+            <Layer {...floodFill} />
+          </Source>
+          <Source id="hin" type="geojson" data={hazards.hin}>
+            <Layer {...hinLine} />
+          </Source>
+          {hazards.ksi && (
+            <Source id="ksi" type="geojson" data={hazards.ksi}>
+              <Layer {...ksiDots} />
+            </Source>
+          )}
+        </>
       )}
       {photos && (
         <Source id="photos" type="geojson" data={photos}>

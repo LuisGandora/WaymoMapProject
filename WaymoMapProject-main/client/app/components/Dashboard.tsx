@@ -34,6 +34,7 @@ export type TourSettings = {
   language: (typeof LANGUAGES)[number]["id"];
   start: (typeof STARTS)[number]["id"];
   minutes: (typeof DURATIONS)[number];
+  safe: boolean;
 };
 
 const icon = "h-5 w-5 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]";
@@ -77,7 +78,7 @@ function Select<T extends string>({
 }
 
 export default function Dashboard() {
-  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30 });
+  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30, safe: true });
   const [tour, setTour] = useState<Tour | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,6 +191,31 @@ export default function Dashboard() {
                 );
               })}
             </div>
+          </section>
+
+          <section>
+            <Label
+              glyph={
+                <svg viewBox="0 0 24 24" className={icon}>
+                  <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+              }
+            >
+              Safer Route
+            </Label>
+            <button
+              type="button"
+              onClick={() => set("safe", !settings.safe)}
+              className={`flex h-[62px] w-full items-center justify-between rounded-2xl border px-5 text-left transition ${
+                settings.safe ? "border-emerald-400/70 bg-emerald-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
+              }`}
+            >
+              <span className="text-[14px] leading-tight text-slate-300">Avoid high-injury corridors, big arterials, live closures, flood zones in storms</span>
+              <span className={`ml-4 rounded-full px-3 py-1 text-[13px] font-bold ${settings.safe ? "bg-emerald-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
+                {settings.safe ? "ON" : "OFF"}
+              </span>
+            </button>
           </section>
         </div>
 

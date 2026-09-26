@@ -8,10 +8,22 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from shapely.geometry import mapping
 
-from . import config, graph, store, tour
+from . import config, graph, safety, store, tour
 
 config.MEDIA.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Waymo Tour API")
+
+
+@app.on_event("startup")
+def warm_up():
+    """Load the 20 MB street graph and the data files now, not on the first click after a restart."""
+    try:
+        G = graph.get()
+        safety.apply(G)
+        tour.segments()
+        print(f"warm: graph {G.number_of_nodes()} nodes, safety data {'on' if safety.data()['edges'] else 'OFF (run pipeline.safety)'}")
+    except Exception as e:  # missing data files are reported by the endpoints themselves
+        print(f"warm-up skipped: {e}")
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.MEDIA), name="static")
 
@@ -23,6 +35,7 @@ class RouteReq(BaseModel):
     minutes: int
     start: str = "wynwood"
     language: str = "en"
+    safe: bool = False  # route between stops on the road-safety weights (see app/safety.py)
 
 
 def _need_data(fn, *a):
@@ -101,12 +114,33 @@ def route(req: RouteReq, bg: BackgroundTasks):
     if not 5 <= req.minutes <= 90:
         raise HTTPException(400, "minutes must be 5-90")
     try:
-        t = _need_data(tour.build, req.mood, req.minutes, req.start)
+        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe)
     except ValueError as e:
         raise HTTPException(422, str(e))
     if CAN_NARRATE and req.language not in t["stops"][0]["audio"]:
         bg.add_task(tour.narrate_tour, t["id"], req.language)  # audio appears on GET /tour/{id} as it is made
     return {"tour_id": t["id"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}
+
+
+@app.get("/weather")
+def weather():
+    """Active NWS alerts for the service area (cached 10 min) and live FL511 closures if a key is configured."""
+    return {**safety.weather(), "closures": safety.closures(), "safety_data": safety.data()["meta"]}
+
+
+@lru_cache
+def _hazards():
+    out = {}
+    for name, file in (("hin", "hin.geojson"), ("flood", "flood_map.geojson"), ("ksi", "ksi_map.geojson")):  # never the raw FEMA file (tens of MB)
+        f = config.DATA / "safety" / file
+        out[name] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"type": "FeatureCollection", "features": []}
+    return out
+
+
+@app.get("/hazards")
+def hazards():
+    """High Injury Network corridors and FEMA flood zones inside the service area, as GeoJSON, for map layers."""
+    return _hazards()
 
 
 @app.get("/tour/{tour_id}")

@@ -26,10 +26,22 @@ export type Tour = {
   path: { type: "LineString"; coordinates: [number, number][] }; // [lng, lat]
   frames: Frame[];
   stops: Stop[];
-  summary: { distance_km: number; drive_minutes: number; stops: number; businesses: string[] };
+  safe?: boolean;
+  summary: {
+    distance_km: number; drive_minutes: number; stops: number; businesses: string[];
+    safety?: Safety | null;
+    weather?: { flood: boolean; storm: boolean; alerts: string[] };
+  };
 };
 
-export type RouteReq = { mood: string; minutes: number; start: string; language: string };
+export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean };
+
+export type Safety = {
+  score: number; grade: "A" | "B" | "C" | "D"; km: number; hin_km: number; hin_pct: number; arterial_pct: number; calm_pct: number;
+  flood_km: number; flood_alert: boolean; ksi_crashes: number; ksi_pedestrian: number; ksi_per_km: number; ksi_vs_area?: number; closures: number;
+  vs_fastest?: { minutes: number; hin_km: number; score: number; arterial_pct: number };
+  vs_default?: { minutes: number; hin_km: number; score: number; calm_pct: number; stops: number };
+};
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail ?? `${r.status} ${r.statusText}`);
@@ -41,6 +53,8 @@ export const getServiceArea = () => fetch(`${API}/service-area`).then(j<GeoJSON.
 export const getSegments = () => fetch(`${API}/segments`).then(j<GeoJSON.FeatureCollection>);
 export const getPhotos = () => fetch(`${API}/photos`).then(j<GeoJSON.FeatureCollection>);
 export const getTour = (id: string) => fetch(`${API}/tour/${id}`).then(j<Tour>);
+export const getHazards = () => fetch(`${API}/hazards`).then(j<{ hin: GeoJSON.FeatureCollection; flood: GeoJSON.FeatureCollection; ksi?: GeoJSON.FeatureCollection }>);
+export const getWeather = () => fetch(`${API}/weather`).then(j<{ alerts: { event: string; headline: string }[]; flood: boolean; storm: boolean; closures: unknown[] }>);
 
 // POST /route returns a partial tour (no frames); fetch the full one right after so ride mode has everything.
 export async function createTour(req: RouteReq): Promise<Tour> {

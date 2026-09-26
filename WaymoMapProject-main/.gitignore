@@ -7,3 +7,7 @@ node_modules/
 # regenerable or too big / licence-restricted: see Server/README.md
 Server/data/graph.graphml
 
+# raw FEMA download is ~43 MB and regenerable (python -m pipeline.safety); the map uses flood_map.geojson
+Server/data/safety/flood.geojson
+# cached tours are rebuilt on demand; commit the baked demo tour deliberately with git add -f
+Server/data/tours/
