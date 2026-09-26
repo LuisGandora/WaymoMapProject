@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapLayerMouseEvent, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { highlights } from "../lib/api";
 import { getHazards, getPhotos, getSegments, getServiceArea, media, type Stop, type Tour } from "../lib/api";
 
 export const MIAMI = { latitude: 25.7617, longitude: -80.1918 };
@@ -53,7 +54,8 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
   const [shot, setShot] = useState<{ lng: number; lat: number; p: Record<string, string | number | null> } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Derived, so a new tour drops the old popup without any state reset.
-  const selected: Stop | null = tour?.stops.find((s) => s.id === selectedId) ?? null;
+  const stops: Stop[] = tour ? highlights(tour) : [];
+  const selected: Stop | null = stops.find((s) => s.id === selectedId) ?? null;
 
   // Static layers, fetched once. Either failing just leaves that layer off; the map still renders.
   useEffect(() => {
@@ -132,7 +134,7 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
           <Layer {...routeLine} />
         </Source>
       )}
-      {tour?.stops.map((s, i) => (
+      {stops.map((s, i) => (
         <Marker key={s.id} longitude={s.lng} latitude={s.lat} anchor="center" onClick={(e) => { e.originalEvent.stopPropagation(); setSelectedId(s.id); }}>
           <div className="grid h-7 w-7 cursor-pointer place-items-center rounded-full border-2 border-[#0e1628] bg-cyan-400 text-[12px] font-extrabold text-[#0e1628] shadow-[0_0_12px_rgba(34,211,238,0.6)]">
             {i + 1}

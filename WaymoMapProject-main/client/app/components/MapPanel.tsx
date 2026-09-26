@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { Tour } from "../lib/api";
+import { highlights, type Tour } from "../lib/api";
 
 const TourMap = dynamic(() => import("./TourMap"), {
   ssr: false,
@@ -20,7 +20,7 @@ export default function MapPanel({ tour, loading, error }: { tour: Tour | null; 
     : error
       ? `Couldn't build tour: ${error}`
       : tour
-        ? `${tour.summary.stops} stops · ${tour.summary.distance_km} km · ${tour.summary.drive_minutes} min`
+        ? `${highlights(tour).length} highlights · ${tour.summary.distance_km} km · ${tour.summary.drive_minutes} min`
         : "Select options and generate to map your tour";
   const sf = tour?.summary.safety;
   const signed = (n: number, unit = "") => `${n > 0 ? "+" : ""}${n}${unit}`;

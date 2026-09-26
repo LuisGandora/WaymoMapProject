@@ -64,3 +64,12 @@ export async function createTour(req: RouteReq): Promise<Tour> {
 }
 
 export const media = (path: string | null | undefined) => (path ? `${API}${path}` : null);
+
+// Narration points. The route drives past every scenic block it can fit, but a 30-minute tour with 30 numbered stops
+// is one per minute, so only the best few get a marker: about one per 4 minutes, at least 4, kept in route order.
+// Ride mode / narration should use this list too.
+export function highlights(tour: Tour): Stop[] {
+  const n = Math.max(4, Math.round(tour.minutes / 4));
+  const keep = new Set([...tour.stops].sort((a, b) => b.score - a.score).slice(0, n).map((s) => s.id));
+  return tour.stops.filter((s) => keep.has(s.id));
+}
