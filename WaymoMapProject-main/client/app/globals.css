@@ -10,6 +10,43 @@ body {
   font-family: var(--font-nunito), system-ui, sans-serif;
 }
 
+/* Narration player equalizer */
+@keyframes eq {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+.eq-bar { transform-origin: bottom; animation: eq 0.9s ease-in-out infinite; }
+.eq-paused .eq-bar { animation-play-state: paused; }
+
+/* Cinematic motion. One easing everywhere so the whole UI moves with the same "weight". */
+:root { --ease-cine: cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes rise { from { opacity: 0; transform: translateY(18px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes title-in { from { opacity: 0; clip-path: inset(0 100% 0 0); transform: translateX(-12px); } to { opacity: 1; clip-path: inset(0 0 0 0); transform: none; } }
+@keyframes sweep { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes pulse-ring { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(2.6); opacity: 0; } }
+@keyframes shimmer { from { transform: translateX(-120%) skewX(-20deg); } to { transform: translateX(320%) skewX(-20deg); } }
+.anim-rise { animation: rise 0.6s var(--ease-cine) both; }
+.anim-title { animation: title-in 0.9s var(--ease-cine) both; }
+.anim-sweep { animation: sweep 0.9s var(--ease-cine) 0.15s both; }
+.pulse-ring { animation: pulse-ring 1.8s var(--ease-cine) infinite; }
+.shimmer::after {
+  content: ""; position: absolute; inset: 0; width: 35%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+/* Sidebar sections cascade in on load. */
+.stagger > * { animation: rise 0.7s var(--ease-cine) both; }
+.stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.stagger > *:nth-child(4) { animation-delay: 0.18s; }
+.stagger > *:nth-child(5) { animation-delay: 0.24s; }
+.stagger > *:nth-child(6) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .eq-bar { animation: none; transform: scaleY(0.6); }
+  .anim-rise, .anim-title, .anim-sweep, .stagger > *, .pulse-ring, .shimmer::after { animation: none !important; }
+}
+
 /* MapLibre controls, restyled for the dark dashboard */
 .maplibregl-ctrl-group {
   background: #0e1628 !important;

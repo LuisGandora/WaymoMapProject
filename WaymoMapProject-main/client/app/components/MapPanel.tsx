@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { highlights, leg, navStops, type LatLng, type Tour } from "../lib/api";
+import type { Story } from "./NarrationPlayer";
 
 const TourMap = dynamic(() => import("./TourMap"), {
   ssr: false,
@@ -44,7 +45,27 @@ function Legend() {
 }
 
 // Right-hand panel: the map plus a status pill (idle / building / error / tour summary).
-export default function MapPanel({ tour, loading, error, picking, startPt, endPt, onPick }: { tour: Tour | null; loading: boolean; error: string | null; picking: "start" | "end" | null; startPt: LatLng | null; endPt: LatLng | null; onPick: (p: LatLng) => void }) {
+export default function MapPanel({
+  tour,
+  loading,
+  error,
+  picking,
+  startPt,
+  endPt,
+  onPick,
+  story = null,
+  cinematic = false,
+}: {
+  tour: Tour | null;
+  loading: boolean;
+  error: string | null;
+  picking: "start" | "end" | null;
+  startPt: LatLng | null;
+  endPt: LatLng | null;
+  onPick: (p: LatLng) => void;
+  story?: Story;
+  cinematic?: boolean;
+}) {
   // Step bar: 0 = the start, then each numbered stop, ending on the destination for a one-way tour.
   // Keyed to the tour so a new tour resets it.
   const [at, setAt] = useState<{ id?: string; n: number | null }>({ n: null });
@@ -78,9 +99,34 @@ export default function MapPanel({ tour, loading, error, picking, startPt, endPt
   return (
     <div className="relative h-full w-full">
       <Legend />
-      <TourMap tour={tour} picking={!!picking} startPt={startPt} endPt={endPt} onPick={onPick} step={step} onStep={setStep} />
+      <TourMap tour={tour} story={story} cinematic={cinematic} picking={!!picking} startPt={startPt} endPt={endPt} onPick={onPick} step={step} onStep={setStep} />
+
+      {/* Cinema mode while the narration plays: letterbox bars + vignette slide in, and retract after. */}
+      <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden" aria-hidden>
+        <div
+          className={`absolute inset-0 transition-opacity duration-1000 ${cinematic ? "opacity-100" : "opacity-0"}`}
+          style={{ background: "radial-gradient(ellipse at center, transparent 55%, rgba(3,7,18,0.75) 100%)" }}
+        />
+        <div className={`absolute inset-x-0 top-0 h-[7vh] bg-black transition-transform duration-1000 [transition-timing-function:var(--ease-cine)] ${cinematic ? "translate-y-0" : "-translate-y-full"}`} />
+        <div className={`absolute inset-x-0 bottom-0 h-[7vh] bg-black transition-transform duration-1000 [transition-timing-function:var(--ease-cine)] ${cinematic ? "translate-y-0" : "translate-y-full"}`} />
+      </div>
+
+      {/* Title card for the place being narrated, re-animated for each new place. */}
+      {story && (
+        <div key={story.key} className="pointer-events-none absolute bottom-[calc(7vh+28px)] right-16 z-10 max-w-[46%] text-right">
+          <p className="anim-title text-[12px] font-semibold uppercase tracking-[0.3em] text-cyan-300/90">{story.label}</p>
+          <p className="anim-title mt-1 text-[clamp(26px,3.2vw,44px)] font-extrabold leading-[1.05] tracking-tight text-white [text-shadow:0_4px_30px_rgba(0,0,0,0.8)]" style={{ animationDelay: "0.12s" }}>
+            {story.place.name}
+          </p>
+          <div className="anim-sweep ml-auto mt-3 h-[3px] w-28 origin-right rounded-full bg-gradient-to-l from-cyan-300 to-blue-500" />
+          <p className="anim-title mt-3 text-[15px] text-slate-200 [text-shadow:0_2px_12px_rgba(0,0,0,0.9)]" style={{ animationDelay: "0.3s" }}>
+            {story.kicker}
+          </p>
+        </div>
+      )}
+
       {tour && last > 0 && (
-        <div className="absolute bottom-10 left-1/2 w-[min(560px,80%)] -translate-x-1/2 rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-5 py-3 shadow-lg backdrop-blur">
+        <div className="absolute bottom-10 left-1/2 z-10 w-[min(560px,80%)] -translate-x-1/2 rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-5 py-3 shadow-lg backdrop-blur">
           <div className="mb-2 flex items-center justify-between gap-3 text-[13px] text-slate-300">
             <button onClick={() => setStep(Math.max(0, cur - 1))} disabled={!step} className="rounded-lg border border-slate-700 px-2.5 py-1 disabled:opacity-30">◀</button>
             <span className="truncate text-center">

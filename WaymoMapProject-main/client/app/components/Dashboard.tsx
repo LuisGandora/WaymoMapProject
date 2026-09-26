@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createTour, getConfig, type LatLng, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
+import NarrationPlayer, { useNarration } from "./NarrationPlayer";
 
 // ids must match Server/app/config.py (MOODS / MATRIX_MOODS, LANGS, HOODS) — GET /config returns the live list.
 export const MOODS = [
@@ -19,7 +20,6 @@ export const LANGUAGES = [
   { id: "es", label: "Spanish" },
   { id: "en", label: "English" },
   { id: "pt", label: "Portuguese" },
-  { id: "ht", label: "Haitian Creole" },
 ] as const;
 
 export const STARTS = [
@@ -128,7 +128,12 @@ export default function Dashboard() {
   const moods = avail ? MOODS.filter((m) => avail.moods.includes(m.id)) : MOODS;
   const starts = avail ? STARTS.filter((h) => avail.starts.includes(h.id)) : STARTS;
 
+  // ElevenLabs intro narration (app/api/narrate). Started before any await so the click still counts for autoplay.
+  const narration = useNarration();
+  const [voice, setVoice] = useState(true);
+
   async function generate() {
+    if (voice) narration.start(settings.mood, settings.language);
     setLoading(true);
     setError(null);
     try {
@@ -166,7 +171,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <div className="flex-1 space-y-10 overflow-y-auto px-8 py-10">
+        <div className="stagger flex-1 space-y-10 overflow-y-auto px-8 py-10">
           <section>
             <Label
               glyph={
@@ -291,13 +296,41 @@ export default function Dashboard() {
               </span>
             </button>
           </section>
+
+          <section>
+            <Label
+              glyph={
+                <svg viewBox="0 0 24 24" className={icon}>
+                  <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                  <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />
+                </svg>
+              }
+            >
+              Voice Narration
+            </Label>
+            <button
+              type="button"
+              onClick={() => {
+                if (voice) narration.stop();
+                setVoice(!voice);
+              }}
+              className={`flex h-[62px] w-full items-center justify-between rounded-2xl border px-5 text-left transition ${
+                voice ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
+              }`}
+            >
+              <span className="text-[14px] leading-tight text-slate-300">A 20-second spoken intro to your tour, in the narration language</span>
+              <span className={`ml-4 rounded-full px-3 py-1 text-[13px] font-bold ${voice ? "bg-cyan-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
+                {voice ? "ON" : "OFF"}
+              </span>
+            </button>
+          </section>
         </div>
 
         <footer className="border-t border-slate-800/70 px-8 py-8">
           <button
             onClick={generate}
             disabled={loading}
-            className="flex h-[72px] w-full items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-60"
+            className={`${loading ? "shimmer" : ""} relative flex h-[72px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
           >
             <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
               <path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z" />
@@ -313,6 +346,8 @@ export default function Dashboard() {
           tour={tour}
           loading={loading}
           error={error}
+          story={narration.story}
+          cinematic={narration.status === "playing"}
           picking={picking}
           startPt={startPt}
           endPt={endPt}
@@ -324,6 +359,7 @@ export default function Dashboard() {
             setError(null);
           }}
         />
+        <NarrationPlayer n={narration} />
       </main>
     </div>
   );
