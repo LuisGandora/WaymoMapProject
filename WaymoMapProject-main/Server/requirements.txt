@@ -16,6 +16,7 @@ h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.20
+litellm==1.102.1
 networkx==3.7
 numpy==2.5.3
 osmnx==2.1.1

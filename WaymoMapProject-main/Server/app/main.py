@@ -27,7 +27,7 @@ def warm_up():
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.MEDIA), name="static")
 
-CAN_NARRATE = bool(config.GEMINI_KEY and config.ELEVEN_KEY and config.ELEVEN_VOICE)
+CAN_NARRATE = bool(config.LLM_KEY and config.ELEVEN_KEY and config.ELEVEN_VOICE)
 
 
 class RouteReq(BaseModel):

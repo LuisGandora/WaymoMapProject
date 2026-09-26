@@ -20,8 +20,12 @@ def has_frame(seg_id) -> bool:
 # Do not name the Maps key GOOGLE_API_KEY: google-genai treats that as *its* key
 # and ignores GEMINI_API_KEY when both are set.
 GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+# Ranking + scripts: LiteLLM, OpenAI-compatible (gpt-oss-120b).
+LLM_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+LLM_BASE = (os.getenv("LLM_BASE_URL") or "").rstrip("/")
+if LLM_KEY:
+    os.environ["OPENAI_API_KEY"] = LLM_KEY
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
