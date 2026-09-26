@@ -242,7 +242,7 @@ export default function Dashboard() {
               onClear={() => { setEndPt(null); setTour(null); }}
             />
             <p className="mt-2 text-[13px] text-slate-400">
-              {endPt ? "One-way tour: start to your destination, past scenic blocks on the way." : "Not set: we pick the most scenic destination within your time budget."}
+              {endPt ? "One-way tour: start to your destination, past scenic blocks on the way." : "Not set: a loop of the most scenic blocks that fits your time budget, back to where you started."}
             </p>
           </section>
 

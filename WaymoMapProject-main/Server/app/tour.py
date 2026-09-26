@@ -62,13 +62,18 @@ def snap(lat, lng, max_m=250):
 def build(mood, minutes, start, safe=False, at=None, to=None):
     """Same (mood, minutes, start, safe, at, to) returns the stored tour instead of rebuilding.
 
-    at=(lat, lng) starts from a spot the user picked instead of the neighborhood's default start; to=(lat, lng) is the
-    destination the user picked (otherwise the most scenic block within reach is chosen).
-    Both snap to the nearest photographed street. With `to`, the path is exactly the road from the start to the
-    destination (nothing before the start, nothing after the end, no detours); the time budget is a ceiling on it.
+    Two modes, told apart by whether the rider picked a destination (`to`):
+    * Loop (default): the scenic blocks for this mood within reach of the start, inserted into a loop by best score per
+      added minute until the time budget is used, and back to the start. 30 minutes means about a 30-minute ride.
+    * One-way (`to` given): exactly the road from the start to that destination, past whatever scenic blocks it passes;
+      the time budget is a ceiling on it. `dest_id` is set only in this mode.
+    at=(lat, lng) starts from a spot picked on the map instead of the neighborhood's default start. Both snap to the
+    nearest photographed street. safe=True draws the road on the road-safety weights (see app/safety.py) and, in a
+    loop, discounts stops on High Injury Network corridors; every tour gets a safety score plus the comparisons.
     """
     tid = tour_id(mood, minutes, start, safe, at, to)
-    if (existing := store.get(tid)) and "summary" in existing and existing.get("dest_id"):  # older cached docs (loops): rebuild
+    existing = store.get(tid)
+    if existing and "summary" in existing and bool(existing.get("dest_id")) == bool(to):  # same mode; a loop id cached as a one-way (or the reverse) is stale
         return existing
     M, segs, G = matrix(mood), segments(), graph.get()
     wx, live = safety.weather(), safety.closures()
@@ -93,35 +98,55 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
             cur = nodes[k]["exit"]
         return edges
 
-    # Every tour is one-way and simple: exactly the road from the start to the destination. Nothing before the
-    # start, nothing after the destination, no detours, and a shortest path never revisits a spot, so no cycles.
     if to:
+        # One-way (the rider picked a destination on the map): exactly the road from the start to it. Nothing before
+        # the start, nothing after the destination, no detours; a shortest path never revisits a spot, so no cycles.
         e = snap(*to)
         if e["id"] not in segs:
             raise ValueError("that end point is on a street with no scenic score; pick another")
+        if e["u"] == o["u"]:
+            raise ValueError("the start and the destination are the same spot")
+        END = e["id"]
+        nodes[END] = {"enter": e["u"], "exit": e["u"], "traverse": 0}  # the path stops at the block's near end
+        route = [K0, END]
+        edges = drive(weight)
+        total = minutes_of(edges)
+        if total > minutes:
+            raise ValueError(f"that destination is about {total:.0f} min from the start, more than your {minutes}-minute budget")
     else:
-        # No destination picked: a scenic block for this mood that the road reaches with time to spare.
-        fwd = nx.single_source_dijkstra_path_length(G, o["u"], weight="travel_time")
-        want = config.mood_tags(mood)  # None = any
-        reach = [k for k, g in segs.items() if k != o["id"] and config.has_frame(k) and (want is None or set(want) & set(g["tags"]))
-                 and fwd.get(g["u"], router.INF) / 60 <= 0.85 * minutes]
-        if not reach:
-            raise ValueError("no scenic block for this mood is within reach of the start in that time; try more minutes or another mood")
-        # The budget sets how far: best-scored block 50-85% of it away; if the scored area is smaller than that,
-        # the best of the five farthest.
-        mins = lambda k: fwd[segs[k]["u"]] / 60
-        pool = [k for k in reach if mins(k) >= 0.5 * minutes] or sorted(reach, key=mins)[-5:]
-        e = segs[max(pool, key=lambda k: (segs[k]["score"], mins(k)))]
-    if e["u"] == o["u"]:
-        raise ValueError("the start and the destination are the same spot")
-    END = e["id"]
-    nodes[END] = {"enter": e["u"], "exit": e["u"], "traverse": 0}  # the path stops at the block's near end
-    route = [K0, END]
-    edges = drive(weight)
+        # Loop (default): the mood's best blocks near the start, inserted by score per added minute until the budget is
+        # used, and back to the start (router.build_loop). Candidates come from the mood's matrix; the radius grows with
+        # the budget (15 min -> 1.5 km, 30 min -> 2.2 km) so a tour never crosses the city for one more stop.
+        END = None
+        radius_m = 800 + 45 * minutes
+        cands = [k for k in M["nodes"] if k in segs and config.has_frame(k)
+                 and router.haversine_m((o["lat"], o["lng"]), (segs[k]["lat"], segs[k]["lng"])) <= radius_m]
+        # Block-to-block minutes are precomputed (pipeline.matrix); start-to-block and block-to-start are computed here,
+        # out from the start and back to it on the reversed graph, so a start picked on the map works too.
+        # Same definition as the matrix: leave a's exit, reach b's enter, drive b.
+        out = nx.single_source_dijkstra_path_length(G, o["u"], weight="travel_time")
+        back = nx.single_source_dijkstra_path_length(G.reverse(copy=False), o["u"], weight="travel_time")
+
+        def t(a, b):
+            if a == K0:
+                n = nodes[b]
+                return out[n["enter"]] / 60 + n["traverse"] if n["enter"] in out else router.INF
+            if b == K0:
+                x = nodes[a]["exit"]
+                return back[x] / 60 if x in back else router.INF
+            return M["minutes"].get(a, {}).get(b, router.INF)
+
+        # safe mode: a stop on a High Injury Network corridor keeps 60% of its score (safety.W["stop_on_hin"])
+        stop_score = {k: segs[k]["score"] * (safety.stop_factor(segs[k]) if safe else 1.0) for k in cands}
+        route, _ = router.build_loop(t, stop_score, K0, cands, minutes)
+        if len(route) == 2:
+            raise ValueError("no scored stops for this mood fit that time budget near the start; try more minutes or another mood")
+        edges = drive(weight)
+        while minutes_of(edges) > minutes * 1.1 and len(route) > 3:  # the safer road is longer; drop the weakest stop until it fits
+            route.remove(min(route[1:-1], key=lambda k: segs[k]["score"]))
+            edges = drive(weight)
+        total = minutes_of(edges)
     fastest = drive("travel_time") if safe else edges
-    total = minutes_of(edges)
-    if total > minutes:
-        raise ValueError(f"that destination is about {total:.0f} min from the start, more than your {minutes}-minute budget")
 
     coords, frames, dist = [], [], 0
     for a, b in edges:
@@ -131,10 +156,13 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
         coords += pts[1:] if coords and coords[-1] == pts[0] else pts
         frames += _frames_on(a, b)
 
-    want = config.mood_tags(mood)  # the numbered stops are the best blocks the road passes; None = any
-    onpath = [k for k in dict.fromkeys(f["segment"] for f in frames) if k in segs and k not in (o["id"], END)]
-    ids = [k for k in onpath if want is None or set(want) & set(segs[k]["tags"])] or onpath
-    ids.append(END)
+    if to:
+        want = config.mood_tags(mood)  # the numbered stops are the best blocks the road passes; None = any
+        onpath = [k for k in dict.fromkeys(f["segment"] for f in frames) if k in segs and k not in (o["id"], END)]
+        ids = [k for k in onpath if want is None or set(want) & set(segs[k]["tags"])] or onpath
+        ids.append(END)
+    else:
+        ids = route[1:-1]  # the loop's stops in driving order; the start is not a stop
     stops = []
     for k in ids:
         s = segs[k]
@@ -161,7 +189,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
     tour = {
         "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe,
         "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"], "photo": f"/static/frames/{o['id']}.jpg"},
-        "dest_id": END,  # the last stop; the path ends there
+        "dest_id": END,  # one-way only: the destination stop, where the path ends; None for a loop (the UI keys off this)
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
         "frames": frames, "stops": stops,
         "summary": {"distance_km": round(dist / 1000, 1), "drive_minutes": round(total, 1), "stops": len(stops), "businesses": [],
@@ -190,5 +218,6 @@ def narrate_tour(tid, lang):
         f = config.MEDIA / "audio" / f"{tid}-{i}-{lang}.mp3"
         narrate.tts(s["script"][lang], f)
         s["audio"][lang] = f"/static/audio/{f.name}"
+        store.save_audio(tid, f"{i}-{lang}", f.read_bytes())  # the MP3 bytes ride along in the Mongo tour document too
         t["summary"]["businesses"] = [x["place"]["name"] for x in t["stops"] if x.get("place")]
         store.save(t)
