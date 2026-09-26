@@ -51,7 +51,22 @@ def build(mood, minutes, start):
         return existing
     M, segs, G = matrix(mood), segments(), graph.get()
     nodes, k0 = M["nodes"], f"start:{start}"
-    cands = [k for k in nodes if k in segs]
+    # --- Radius filter ---------------------------------------------------------------------------
+    # Problem: the matrix holds the best-scored blocks for this mood across EVERY scored neighborhood.
+    # Once the router has used up the blocks near the start and still has minutes left, the only
+    # candidates remaining are far away, so it drives across the city for one or two more stops
+    # (e.g. a Wynwood tour crossing the Miami River for two Little Havana blocks).
+    # Fix: a tour may only use blocks within a radius of its start point. The radius grows with the
+    # time budget: 15 min -> 1.5 km, 30 min -> 2.2 km, 45 min -> 2.8 km. Wynwood and Little Havana are
+    # 3.3 km apart, so at these sizes a tour always stays in the neighborhood it started in.
+    origin = config.HOODS[start]["start"]                    # (lat, lng) of the loop's start point
+    radius_m = 800 + 45 * minutes                             # metres; the formula above
+    cands = [
+        k for k in nodes                                      # every candidate block in the matrix
+        if k in segs                                          # ...that is a scored street piece (not a start node)
+        and router.haversine_m(origin, (segs[k]["lat"], segs[k]["lng"])) <= radius_m  # ...within reach
+    ]
+    # ----------------------------------------------------------------------------------------------
     route, total = router.build_loop(lambda a, b: M["minutes"][a].get(b, router.INF),
                                      {k: segs[k]["score"] for k in cands}, k0, cands, minutes)
     if len(route) == 2:

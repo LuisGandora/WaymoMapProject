@@ -15,7 +15,10 @@ def main():
     segs = json.loads((config.DATA / "segments.json").read_text(encoding="utf-8"))
     starts = {f"start:{h}": graph.nearest(G, *c["start"]) for h, c in config.HOODS.items()}
     for mood in config.MATRIX_MOODS:
-        cands = router.top_candidates(segs, config.mood_tags(mood))
+        # 60 candidates per mood, not 30: tour.build() filters these down to the ones near the tour's
+        # start (radius filter), so each neighborhood needs enough of its own blocks left to fill the
+        # time budget. Dijkstra from 60 nodes is still only a few seconds.
+        cands = router.top_candidates(segs, config.mood_tags(mood), n=60)
         if not cands:
             print(f"{mood}: no matching segments, skipped")
             continue
