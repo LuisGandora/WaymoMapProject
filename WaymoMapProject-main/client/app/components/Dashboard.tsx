@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import { createTour, type Tour } from "../lib/api";
+import { useEffect, useState, type ReactNode } from "react";
+import { createTour, getConfig, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
 
 // ids must match Server/app/config.py (MOODS / MATRIX_MOODS, LANGS, HOODS) — GET /config returns the live list.
@@ -84,6 +84,25 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof TourSettings>(k: K, v: TourSettings[K]) => setSettings((s) => ({ ...s, [k]: v }));
 
+  // Only offer moods / starts the backend has real scored blocks for (GET /config). The lists above are the labels;
+  // Wynwood alone has no waterfront or art deco, so those stay hidden until another neighborhood is scored.
+  const [avail, setAvail] = useState<{ moods: string[]; starts: string[] } | null>(null);
+  useEffect(() => {
+    getConfig()
+      .then((c) => {
+        setAvail({ moods: c.moods, starts: c.starts });
+        // If the current pick isn't offered, move to the first one that is.
+        setSettings((s) => ({
+          ...s,
+          mood: c.moods.includes(s.mood) ? s.mood : (MOODS.find((m) => c.moods.includes(m.id))?.id ?? s.mood),
+          start: c.starts.includes(s.start) ? s.start : (STARTS.find((h) => c.starts.includes(h.id))?.id ?? s.start),
+        }));
+      })
+      .catch((e) => console.warn("config:", e));
+  }, []);
+  const moods = avail ? MOODS.filter((m) => avail.moods.includes(m.id)) : MOODS;
+  const starts = avail ? STARTS.filter((h) => avail.starts.includes(h.id)) : STARTS;
+
   async function generate() {
     setLoading(true);
     setError(null);
@@ -131,7 +150,7 @@ export default function Dashboard() {
             >
               Tour Mood
             </Label>
-            <Select value={settings.mood} options={MOODS} onChange={(v) => set("mood", v)} />
+            <Select value={settings.mood} options={moods} onChange={(v) => set("mood", v)} />
           </section>
 
           <section>
@@ -159,7 +178,7 @@ export default function Dashboard() {
             >
               Start From
             </Label>
-            <Select value={settings.start} options={STARTS} onChange={(v) => set("start", v)} />
+            <Select value={settings.start} options={starts} onChange={(v) => set("start", v)} />
           </section>
 
           <section>

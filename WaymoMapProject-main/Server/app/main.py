@@ -50,9 +50,38 @@ def health():
     return {"ok": True, "narration": CAN_NARRATE, "mongo": bool(config.MONGO_URI)}
 
 
+MIN_CANDIDATES = 5      # a mood needs this many scored blocks before the UI offers it
+MIN_HOOD_SEGMENTS = 20  # a start neighborhood needs this many scored blocks inside its bbox
+
+
+def available_moods():
+    """Moods whose matrix has enough real candidates. Wynwood has no waterfront or art deco, so until another
+    neighborhood is scored those moods are hidden rather than producing a tour of nothing."""
+    out = []
+    for m in config.MATRIX_MOODS:
+        try:
+            nodes = tour.matrix(m)["nodes"]
+        except FileNotFoundError:
+            continue
+        if sum(not k.startswith("start:") for k in nodes) >= MIN_CANDIDATES:
+            out.append(m)
+    return out
+
+
+def available_starts():
+    """Start neighborhoods that actually have scored blocks (config.HOODS lists demo boxes, not what's been scored)."""
+    segs = tour.segments().values()
+    out = []
+    for h, c in config.HOODS.items():
+        w, s, e, n = c["bbox"]
+        if sum(w <= x["lng"] <= e and s <= x["lat"] <= n for x in segs) >= MIN_HOOD_SEGMENTS:
+            out.append(h)
+    return out
+
+
 @app.get("/config")
 def options():
-    return {"moods": config.MATRIX_MOODS, "languages": config.LANGS, "starts": list(config.HOODS)}
+    return {"moods": _need_data(available_moods), "languages": config.LANGS, "starts": _need_data(available_starts)}
 
 
 @lru_cache
@@ -109,14 +138,16 @@ def segments(bbox: str | None = None):
 
 @app.post("/route")
 def route(req: RouteReq, bg: BackgroundTasks):
-    if req.mood not in config.MATRIX_MOODS or req.start not in config.HOODS or req.language not in config.LANGS:
-        raise HTTPException(400, "unknown mood, start or language; see GET /config")
+    if req.mood not in _need_data(available_moods) or req.start not in _need_data(available_starts) or req.language not in config.LANGS:
+        raise HTTPException(400, "that mood or start has no scored blocks yet; GET /config lists what's available")
     if not 5 <= req.minutes <= 90:
         raise HTTPException(400, "minutes must be 5-90")
     try:
         t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    if not t["stops"]:
+        raise HTTPException(422, "no scenic blocks for that mood within reach of the start; try another mood or a longer time budget")
     if CAN_NARRATE and req.language not in t["stops"][0]["audio"]:
         bg.add_task(tour.narrate_tour, t["id"], req.language)  # audio appears on GET /tour/{id} as it is made
     return {"tour_id": t["id"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}

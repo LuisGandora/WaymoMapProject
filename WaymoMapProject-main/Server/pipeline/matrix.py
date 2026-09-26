@@ -20,6 +20,7 @@ def main():
         # time budget. Dijkstra from 60 nodes is still only a few seconds.
         cands = router.top_candidates(segs, config.mood_tags(mood), n=60)
         if not cands:
+            (config.DATA / f"matrix_{mood}.json").unlink(missing_ok=True)  # never leave a stale matrix from an older run
             print(f"{mood}: no matching segments, skipped")
             continue
         nodes = {s["id"]: {"enter": s["u"], "exit": s["v"], "traverse": graph.best_edge(G, s["u"], s["v"])["travel_time"] / 60}

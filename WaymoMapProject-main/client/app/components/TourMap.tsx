@@ -20,7 +20,9 @@ const segmentsLine: LayerProps = {
     "line-width": ["interpolate", ["linear"], ["zoom"], 12, 1.5, 15, 4],
     "line-opacity": 0.85,
     // green = scenic, gray = not. Unscored streets aren't in segments.json at all.
-    "line-color": ["interpolate", ["linear"], ["get", "score"], 1, "#475569", 5, "#eab308", 10, "#22c55e"],
+    // Real Gemini scores are harsh (most blocks 1-2, murals 5-7, nothing above 7), so the ramp is fit to that range:
+    // gray up to 2, yellow at 4, full green by 7. Bump these if the scoring prompt changes.
+    "line-color": ["interpolate", ["linear"], ["get", "score"], 2, "#475569", 4, "#eab308", 7, "#22c55e"],
   },
 };
 // Streets that have a Street View frame (scored or not). Thin line for looks, wide invisible one so streets are easy to click.
