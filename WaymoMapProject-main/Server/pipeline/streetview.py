@@ -28,7 +28,7 @@ def fetch(p):
 
 
 def main():
-    assert config.GOOGLE_KEY, "set GOOGLE_API_KEY in Server/.env"
+    assert config.GOOGLE_KEY, "set GOOGLE_MAPS_API_KEY in Server/.env"
     OUT.mkdir(parents=True, exist_ok=True)
     pts = json.loads((config.DATA / "points.json").read_text(encoding="utf-8"))
     with ThreadPoolExecutor(8) as ex:

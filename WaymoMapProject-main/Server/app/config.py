@@ -12,7 +12,9 @@ MEDIA = DATA / "media"  # frames/*.jpg and audio/*.mp3, served at /static
 AREA = Path(os.getenv("SERVICE_AREA", DATA / "service_area.geojson"))
 GRAPH_FILE = DATA / "graph.graphml"
 
-GOOGLE_KEY = os.getenv("GOOGLE_API_KEY", "")  # Street View Static + Places (backend only)
+# Do not name the Maps key GOOGLE_API_KEY: google-genai treats that as *its* key
+# and ignores GEMINI_API_KEY when both are set.
+GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
