@@ -50,6 +50,30 @@ def _segments_geojson():
          "properties": {"id": s["id"], "score": s["score"], "tags": s["tags"], "street": s["street"]}} for s in segs]}
 
 
+@lru_cache
+def _photos_geojson():
+    """Every street piece that has a downloaded frame, scored or not: points.json geometry + the frame's sidecar json."""
+    pts = json.loads((config.DATA / "points.json").read_text(encoding="utf-8"))
+    feats = []
+    for p in pts:
+        frames = config.MEDIA / "frames"
+        if not (frames / f"{p['id']}.jpg").exists():
+            continue
+        side = frames / f"{p['id']}.json"  # written by pipeline.streetview: where the pano really is
+        info = json.loads(side.read_text(encoding="utf-8")) if side.exists() else {}
+        feats.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": p["line"]}, "properties": {
+            "id": p["id"], "street": p["street"], "photo": f"/static/frames/{p['id']}.jpg",
+            "lat": info.get("lat", p["lat"]), "lng": info.get("lng", p["lng"]), "heading": p["heading"],
+            "date": info.get("date"), "copyright": info.get("copyright")}})
+    return {"type": "FeatureCollection", "features": feats}
+
+
+@app.get("/photos")
+def photos():
+    """Street pieces that have a Street View frame (independent of scoring), for click-a-street-to-see-it."""
+    return _need_data(_photos_geojson)
+
+
 @app.get("/service-area")
 def service_area():
     """The traced Waymo polygon as a GeoJSON Feature, for the frontend outline layer."""

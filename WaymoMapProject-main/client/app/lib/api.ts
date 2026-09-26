@@ -39,6 +39,7 @@ async function j<T>(r: Response): Promise<T> {
 export const getConfig = () => fetch(`${API}/config`).then(j<{ moods: string[]; languages: Record<string, string>; starts: string[] }>);
 export const getServiceArea = () => fetch(`${API}/service-area`).then(j<GeoJSON.Feature>);
 export const getSegments = () => fetch(`${API}/segments`).then(j<GeoJSON.FeatureCollection>);
+export const getPhotos = () => fetch(`${API}/photos`).then(j<GeoJSON.FeatureCollection>);
 export const getTour = (id: string) => fetch(`${API}/tour/${id}`).then(j<Tour>);
 
 // POST /route returns a partial tour (no frames); fetch the full one right after so ride mode has everything.

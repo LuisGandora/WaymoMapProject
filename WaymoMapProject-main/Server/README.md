@@ -65,6 +65,7 @@ service_area.geojson --> graph.py (OSM, no highways) --> graph.graphml
 | `GET /config` | moods, languages, start neighborhoods (feed the pickers) |
 | `GET /service-area` | the traced polygon as a GeoJSON Feature (outline layer) |
 | `GET /segments?bbox=minLng,minLat,maxLng,maxLat` | scored ~100 m street pieces as GeoJSON (`score`, `tags`, `street`) for the green-to-gray map; `bbox` optional |
+| `GET /photos` | every street piece with a downloaded Street View frame as GeoJSON (`photo`, `street`, `date`, pano `lat/lng`). Needs only `sample` + `streetview`, not `score`; the map uses it for click-a-street-to-see-it |
 | `POST /route` `{mood, minutes, start, language}` | builds (or returns the cached) loop; starts narration in `language` in the background. Returns `{tour_id, path, stops, summary}` |
 | `GET /tour/{id}` | full tour: `path` (GeoJSON LineString, lng/lat), `frames[]` for ride mode, `stops[]` (with `frame_idx`, `script{lang}`, `audio{lang}`), `summary`. Poll it while audio generates |
 | `POST /tour/{id}/narrate?lang=es` | language toggle: generate another language, then poll `GET /tour/{id}` |

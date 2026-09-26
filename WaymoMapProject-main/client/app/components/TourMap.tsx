@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapRef } from "react-map-gl/maplibre";
+import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapLayerMouseEvent, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getSegments, getServiceArea, media, type Stop, type Tour } from "../lib/api";
+import { getPhotos, getSegments, getServiceArea, media, type Stop, type Tour } from "../lib/api";
 
 export const MIAMI = { latitude: 25.7617, longitude: -80.1918 };
 
@@ -23,6 +23,9 @@ const segmentsLine: LayerProps = {
     "line-color": ["interpolate", ["linear"], ["get", "score"], 1, "#475569", 5, "#eab308", 10, "#22c55e"],
   },
 };
+// Streets that have a Street View frame (scored or not). Thin line for looks, wide invisible one so streets are easy to click.
+const photosLine: LayerProps = { id: "photos", type: "line", paint: { "line-color": "#94a3b8", "line-width": 1.5, "line-opacity": 0.5 } };
+const photosHit: LayerProps = { id: "photos-hit", type: "line", paint: { "line-width": 16, "line-opacity": 0 } };
 const routeCasing: LayerProps = { id: "route-casing", type: "line", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#0e1628", "line-width": 9 } };
 const routeLine: LayerProps = { id: "route", type: "line", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#22d3ee", "line-width": 5 } };
 
@@ -30,6 +33,8 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
   const mapRef = useRef<MapRef>(null);
   const [area, setArea] = useState<GeoJSON.Feature | null>(null);
   const [segments, setSegments] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [photos, setPhotos] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [shot, setShot] = useState<{ lng: number; lat: number; p: Record<string, string | number | null> } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Derived, so a new tour drops the old popup without any state reset.
   const selected: Stop | null = tour?.stops.find((s) => s.id === selectedId) ?? null;
@@ -37,6 +42,7 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
   // Static layers, fetched once. Either failing just leaves that layer off; the map still renders.
   useEffect(() => {
     getServiceArea().then(setArea).catch((e) => console.warn("service area:", e));
+    getPhotos().then(setPhotos).catch((e) => console.warn("photos:", e));
     getSegments().then(setSegments).catch((e) => console.warn("segments:", e));
   }, []);
 
@@ -54,9 +60,18 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
     );
   }, [tour]);
 
+  // Click a street -> the frame nearest the click (overlapping two-way pieces are both hit; pick by distance).
+  const onMapClick = (e: MapLayerMouseEvent) => {
+    const d = (p: { lat?: unknown; lng?: unknown }) => Math.hypot((Number(p.lng) - e.lngLat.lng) * Math.cos((e.lngLat.lat * Math.PI) / 180), Number(p.lat) - e.lngLat.lat);
+    const best = e.features?.map((f) => f.properties ?? {}).sort((a, b) => d(a) - d(b))[0];
+    setShot(best ? { lng: e.lngLat.lng, lat: e.lngLat.lat, p: best } : null);
+  };
+
   return (
     <Map
       ref={mapRef}
+      interactiveLayerIds={["photos-hit"]}
+      onClick={onMapClick}
       initialViewState={{ ...MIAMI, zoom: 12 }}
       mapStyle={DARK_STYLE}
       style={{ width: "100%", height: "100%" }}
@@ -66,6 +81,12 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
         <Source id="area" type="geojson" data={area}>
           <Layer {...areaFill} />
           <Layer {...areaLine} />
+        </Source>
+      )}
+      {photos && (
+        <Source id="photos" type="geojson" data={photos}>
+          <Layer {...photosLine} />
+          <Layer {...photosHit} />
         </Source>
       )}
       {segments && (
@@ -95,6 +116,16 @@ export default function TourMap({ tour }: { tour: Tour | null }) {
             <div className="text-[13px] text-cyan-300">{selected.score}/10 · {selected.tags.join(", ") || "no tags"}</div>
             <div className="text-[13px] text-slate-300">{selected.why}</div>
             {selected.place && <div className="text-[13px] text-slate-400">Near {selected.place.name} ({selected.place.rating}★)</div>}
+          </div>
+        </Popup>
+      )}
+      {shot && (
+        <Popup longitude={shot.lng} latitude={shot.lat} anchor="bottom" offset={12} onClose={() => setShot(null)} maxWidth="300px">
+          <div className="space-y-1.5 text-slate-100">
+            {/* eslint-disable-next-line @next/next/no-img-element -- served by our own API */}
+            <img src={media(String(shot.p.photo))!} alt="" className="w-full rounded-lg" />
+            <div className="text-[15px] font-bold">{shot.p.street || "Unnamed block"}</div>
+            <div className="text-[12px] text-slate-400">Street View{shot.p.date ? ` · ${shot.p.date}` : ""} · {shot.p.copyright ?? "© Google"}</div>
           </div>
         </Popup>
       )}

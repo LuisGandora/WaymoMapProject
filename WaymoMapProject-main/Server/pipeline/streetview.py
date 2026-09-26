@@ -16,11 +16,19 @@ OUT = config.MEDIA / "frames"
 
 def fetch(p):
     out = OUT / f"{p['id']}.jpg"
-    if out.exists():
+    side = out.with_suffix(".json")  # where the pano really is, so the map can tie the photo to a location
+    if out.exists() and side.exists():
         return 0
     q = {"location": f"{p['lat']},{p['lng']}", "heading": p["heading"], "source": "outdoor", "key": config.GOOGLE_KEY}
-    if httpx.get(URL + "/metadata", params=q, timeout=30).json().get("status") != "OK":
+    meta = httpx.get(URL + "/metadata", params=q, timeout=30).json()  # free
+    if meta.get("status") != "OK":
         return 0
+    side.write_text(json.dumps({
+        "id": p["id"], "street": p["street"], "lat": meta["location"]["lat"], "lng": meta["location"]["lng"],
+        "heading": p["heading"], "requested": {"lat": p["lat"], "lng": p["lng"], "heading": p["heading"]},
+        "pano_id": meta.get("pano_id"), "date": meta.get("date"), "copyright": meta.get("copyright")}), encoding="utf-8")
+    if out.exists():
+        return 0  # sidecar backfill only
     r = httpx.get(URL, params={**q, "size": "640x400", "fov": 90, "pitch": 0}, timeout=30)
     r.raise_for_status()
     out.write_bytes(r.content)
