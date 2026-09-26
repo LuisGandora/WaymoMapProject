@@ -6,12 +6,24 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from shapely.geometry import Point, mapping
+from shapely.geometry import mapping
 
-from . import config, graph, store, tour
+from . import config, graph, safety, store, tour
 
 config.MEDIA.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Waymo Tour API")
+
+
+@app.on_event("startup")
+def warm_up():
+    """Load the 20 MB street graph and the data files now, not on the first click after a restart."""
+    try:
+        G = graph.get()
+        safety.apply(G)
+        tour.segments()
+        print(f"warm: graph {G.number_of_nodes()} nodes, safety data {'on' if safety.data()['edges'] else 'OFF (run pipeline.safety)'}")
+    except Exception as e:  # missing data files are reported by the endpoints themselves
+        print(f"warm-up skipped: {e}")
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.MEDIA), name="static")
 
@@ -23,8 +35,7 @@ class RouteReq(BaseModel):
     minutes: int
     start: str = "wynwood"
     language: str = "en"
-    lat: float | None = None  # custom start (with lng); must be inside the service area
-    lng: float | None = None
+    safe: bool = False  # route between stops on the road-safety weights (see app/safety.py)
 
 
 def _need_data(fn, *a):
@@ -39,9 +50,38 @@ def health():
     return {"ok": True, "narration": CAN_NARRATE, "mongo": bool(config.MONGO_URI)}
 
 
+MIN_CANDIDATES = 5      # a mood needs this many scored blocks before the UI offers it
+MIN_HOOD_SEGMENTS = 20  # a start neighborhood needs this many scored blocks inside its bbox
+
+
+def available_moods():
+    """Moods whose matrix has enough real candidates. Wynwood has no waterfront or art deco, so until another
+    neighborhood is scored those moods are hidden rather than producing a tour of nothing."""
+    out = []
+    for m in config.MATRIX_MOODS:
+        try:
+            nodes = tour.matrix(m)["nodes"]
+        except FileNotFoundError:
+            continue
+        if sum(not k.startswith("start:") for k in nodes) >= MIN_CANDIDATES:
+            out.append(m)
+    return out
+
+
+def available_starts():
+    """Start neighborhoods that actually have scored blocks (config.HOODS lists demo boxes, not what's been scored)."""
+    segs = tour.segments().values()
+    out = []
+    for h, c in config.HOODS.items():
+        w, s, e, n = c["bbox"]
+        if sum(w <= x["lng"] <= e and s <= x["lat"] <= n for x in segs) >= MIN_HOOD_SEGMENTS:
+            out.append(h)
+    return out
+
+
 @app.get("/config")
 def options():
-    return {"moods": config.MATRIX_MOODS, "languages": config.LANGS, "starts": list(config.HOODS)}
+    return {"moods": _need_data(available_moods), "languages": config.LANGS, "starts": _need_data(available_starts)}
 
 
 @lru_cache
@@ -56,10 +96,6 @@ def _segments_geojson():
 def _photos_geojson():
     """Every street piece that has a downloaded frame, scored or not: points.json geometry + the frame's sidecar json."""
     pts = json.loads((config.DATA / "points.json").read_text(encoding="utf-8"))
-    try:
-        scored = tour.segments()  # optional: score/description appear only if pipeline.score + rollup were run
-    except FileNotFoundError:
-        scored = {}
     feats = []
     for p in pts:
         frames = config.MEDIA / "frames"
@@ -70,9 +106,7 @@ def _photos_geojson():
         feats.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": p["line"]}, "properties": {
             "id": p["id"], "street": p["street"], "photo": f"/static/frames/{p['id']}.jpg",
             "lat": info.get("lat", p["lat"]), "lng": info.get("lng", p["lng"]), "heading": p["heading"],
-            "date": info.get("date"), "copyright": info.get("copyright"),
-            "score": (s := scored.get(p["id"], {})).get("score"), "tags": s.get("tags", []),
-            "why": tour.why(p["street"], s.get("score"), s.get("tags", []))}})
+            "date": info.get("date"), "copyright": info.get("copyright")}})
     return {"type": "FeatureCollection", "features": feats}
 
 
@@ -104,21 +138,40 @@ def segments(bbox: str | None = None):
 
 @app.post("/route")
 def route(req: RouteReq, bg: BackgroundTasks):
-    custom = req.lat is not None and req.lng is not None
-    if req.mood not in config.MATRIX_MOODS or (not custom and req.start not in config.HOODS) or req.language not in config.LANGS:
-        raise HTTPException(400, "unknown mood, start or language; see GET /config")
-    if custom and not graph.polygon().contains(Point(req.lng, req.lat)):
-        raise HTTPException(400, "start is outside the service area")
+    if req.mood not in _need_data(available_moods) or req.start not in _need_data(available_starts) or req.language not in config.LANGS:
+        raise HTTPException(400, "that mood or start has no scored blocks yet; GET /config lists what's available")
     if not 5 <= req.minutes <= 90:
         raise HTTPException(400, "minutes must be 5-90")
     try:
-        doc = _need_data(tour.build_options, req.mood, req.minutes, req.start, (req.lat, req.lng) if custom else None)
+        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe)
     except ValueError as e:
         raise HTTPException(422, str(e))
-    best = doc["options"][0]["id"]
-    if CAN_NARRATE and req.language not in store.get(best)["stops"][0]["audio"]:
-        bg.add_task(tour.narrate_tour, best, req.language)  # only the top pick; others via POST /tour/{id}/narrate
-    return {"tour_id": best, "options": doc["options"]}
+    if not t["stops"]:
+        raise HTTPException(422, "no scenic blocks for that mood within reach of the start; try another mood or a longer time budget")
+    if CAN_NARRATE and req.language not in t["stops"][0]["audio"]:
+        bg.add_task(tour.narrate_tour, t["id"], req.language)  # audio appears on GET /tour/{id} as it is made
+    return {"tour_id": t["id"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}
+
+
+@app.get("/weather")
+def weather():
+    """Active NWS alerts for the service area (cached 10 min) and live FL511 closures if a key is configured."""
+    return {**safety.weather(), "closures": safety.closures(), "safety_data": safety.data()["meta"]}
+
+
+@lru_cache
+def _hazards():
+    out = {}
+    for name, file in (("hin", "hin.geojson"), ("flood", "flood_map.geojson"), ("ksi", "ksi_map.geojson")):  # never the raw FEMA file (tens of MB)
+        f = config.DATA / "safety" / file
+        out[name] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"type": "FeatureCollection", "features": []}
+    return out
+
+
+@app.get("/hazards")
+def hazards():
+    """High Injury Network corridors and FEMA flood zones inside the service area, as GeoJSON, for map layers."""
+    return _hazards()
 
 
 @app.get("/tour/{tour_id}")

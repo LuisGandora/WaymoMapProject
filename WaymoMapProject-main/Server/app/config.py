@@ -25,6 +25,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
+FL511_KEY = os.getenv("FL511_API_KEY", "")  # optional: live closures/incidents for the safety layer
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 # Calibration knob: OSM speeds are free-flow; robotaxis in Miami traffic are slower.
 SPEED_FACTOR = float(os.getenv("SPEED_FACTOR", "0.8"))
