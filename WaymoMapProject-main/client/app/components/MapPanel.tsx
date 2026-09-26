@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { TourSettings } from "./Dashboard";
+import type { Tour } from "../lib/api";
 
 const TourMap = dynamic(() => import("./TourMap"), {
   ssr: false,
@@ -13,16 +13,26 @@ const TourMap = dynamic(() => import("./TourMap"), {
   ),
 });
 
-// Right-hand panel. `settings` = live sidebar selections; `requested` = settings captured when "Generate City Tour" was clicked (null until then).
-export default function MapPanel({ requested }: { settings: TourSettings; requested: TourSettings | null }) {
+// Right-hand panel: the map plus a status pill (idle / building / error / tour summary).
+export default function MapPanel({ tour, loading, error }: { tour: Tour | null; loading: boolean; error: string | null }) {
+  const pill = loading
+    ? "Building your tour…"
+    : error
+      ? `Couldn't build tour: ${error}`
+      : tour
+        ? `${tour.summary.stops} stops · ${tour.summary.distance_km} km · ${tour.summary.drive_minutes} min`
+        : "Select options and generate to map your tour";
   return (
     <div className="relative h-full w-full">
-      <TourMap />
-      {!requested && (
-        <div className="pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 rounded-full border border-slate-700/70 bg-[#0e1628]/85 px-5 py-2.5 text-[14px] text-slate-300 shadow-lg backdrop-blur">
-          Select options and generate to map your tour
-        </div>
-      )}
+      <TourMap tour={tour} />
+      <div
+        className={`pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 rounded-full border px-5 py-2.5 text-[14px] shadow-lg backdrop-blur ${
+          error ? "border-red-500/60 bg-red-950/80 text-red-200" : "border-slate-700/70 bg-[#0e1628]/85 text-slate-300"
+        }`}
+      >
+        {loading && <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-cyan-400 align-middle" />}
+        {pill}
+      </div>
     </div>
   );
 }

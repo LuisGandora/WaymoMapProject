@@ -1,20 +1,30 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { createTour, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
 
+// ids must match Server/app/config.py (MOODS / MATRIX_MOODS, LANGS, HOODS) — GET /config returns the live list.
 export const MOODS = [
-  { id: "wynwood", label: "Wynwood Murals & Art" },
-  { id: "south_beach", label: "South Beach Art Deco & Ocean" },
-  { id: "downtown", label: "Miami Downtown Skyline" },
-  { id: "brickell", label: "Brickell Nightlife & Bay" },
+  { id: "murals+sunset", label: "Murals & Sunset" },
+  { id: "murals", label: "Street Art & Murals" },
+  { id: "food", label: "Cuban Food & Cafés" },
+  { id: "historic", label: "Historic Miami" },
+  { id: "art_deco", label: "Art Deco" },
+  { id: "water", label: "Waterfront" },
+  { id: "surprise", label: "Surprise me" },
 ] as const;
 
 export const LANGUAGES = [
-  { id: "en", label: "English (US)" },
-  { id: "es", label: "Spanish (Latin America)" },
-  { id: "fr", label: "French" },
-  { id: "zh", label: "Chinese (Mandarin)" },
+  { id: "es", label: "Spanish" },
+  { id: "en", label: "English" },
+  { id: "pt", label: "Portuguese" },
+  { id: "ht", label: "Haitian Creole" },
+] as const;
+
+export const STARTS = [
+  { id: "wynwood", label: "Wynwood" },
+  { id: "little_havana", label: "Little Havana" },
 ] as const;
 
 export const DURATIONS = [15, 30, 45] as const;
@@ -22,6 +32,7 @@ export const DURATIONS = [15, 30, 45] as const;
 export type TourSettings = {
   mood: (typeof MOODS)[number]["id"];
   language: (typeof LANGUAGES)[number]["id"];
+  start: (typeof STARTS)[number]["id"];
   minutes: (typeof DURATIONS)[number];
 };
 
@@ -66,9 +77,23 @@ function Select<T extends string>({
 }
 
 export default function Dashboard() {
-  const [settings, setSettings] = useState<TourSettings>({ mood: "wynwood", language: "es", minutes: 30 });
-  const [requested, setRequested] = useState<TourSettings | null>(null);
+  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30 });
+  const [tour, setTour] = useState<Tour | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof TourSettings>(k: K, v: TourSettings[K]) => setSettings((s) => ({ ...s, [k]: v }));
+
+  async function generate() {
+    setLoading(true);
+    setError(null);
+    try {
+      setTour(await createTour(settings));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-[#030712] text-slate-100">
@@ -126,6 +151,20 @@ export default function Dashboard() {
             <Label
               glyph={
                 <svg viewBox="0 0 24 24" className={icon}>
+                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z" />
+                  <circle cx="12" cy="10" r="3" />
+                </svg>
+              }
+            >
+              Start From
+            </Label>
+            <Select value={settings.start} options={STARTS} onChange={(v) => set("start", v)} />
+          </section>
+
+          <section>
+            <Label
+              glyph={
+                <svg viewBox="0 0 24 24" className={icon}>
                   <circle cx="12" cy="12" r="10" />
                   <path d="M12 6v6l4 2" />
                 </svg>
@@ -156,20 +195,21 @@ export default function Dashboard() {
 
         <footer className="border-t border-slate-800/70 px-8 py-8">
           <button
-            onClick={() => setRequested({ ...settings })}
-            className="flex h-[72px] w-full items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99]"
+            onClick={generate}
+            disabled={loading}
+            className="flex h-[72px] w-full items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-60"
           >
             <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
               <path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z" />
               <path d="M20 3v4M22 5h-4M4 17v2M5 18H3" />
             </svg>
-            Generate City Tour
+            {loading ? "Building…" : "Generate City Tour"}
           </button>
         </footer>
       </aside>
 
       <main className="relative flex-1 bg-[#030712] bg-[radial-gradient(rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]">
-        <MapPanel settings={settings} requested={requested} />
+        <MapPanel tour={tour} loading={loading} error={error} />
       </main>
     </div>
   );
