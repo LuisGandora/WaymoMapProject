@@ -13,8 +13,14 @@ from pydantic import BaseModel
 from app import config
 
 OUT = config.DATA / "frames.json"
-PROMPT = ("Rate this street view 1-10 as something a tourist would want to see out a car window. "
-          f"Tag what is here using only these tags: {', '.join(config.TAGS)}.")
+
+
+def prompt(p):
+    street = p.get("street") or "unnamed street"
+    return (f"This Street View photo was taken at {p['lat']}, {p['lng']} on {street} in Miami, "
+            f"heading {p['heading']}° (passenger-side window). Use these coordinates; do not infer the location from the image. "
+            f"Rate the view 1-10 as something a tourist would want to see out a car window. "
+            f"Tag what is visible using only these tags: {', '.join(config.TAGS)}.")
 
 
 class Rating(BaseModel):
@@ -28,7 +34,7 @@ def rate(client, p):
     img = (config.MEDIA / "frames" / f"{p['id']}.jpg").read_bytes()
     r = client.models.generate_content(
         model=config.GEMINI_MODEL,
-        contents=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), PROMPT],
+        contents=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), prompt(p)],
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Rating),
     )
     return r.parsed
