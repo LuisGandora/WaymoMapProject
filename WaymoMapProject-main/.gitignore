@@ -6,4 +6,4 @@ node_modules/
 
 # regenerable or too big / licence-restricted: see Server/README.md
 Server/data/graph.graphml
-Server/data/media/
+
