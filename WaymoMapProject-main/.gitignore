@@ -11,3 +11,6 @@ Server/data/graph.graphml
 Server/data/safety/flood.geojson
 # cached tours are rebuilt on demand; commit the baked demo tour deliberately with git add -f
 Server/data/tours/
+
+# local safety copies of frames.json made before re-scoring/verifying
+Server/data/*.bak-*

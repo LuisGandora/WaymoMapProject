@@ -28,7 +28,7 @@ def fetch(p):
         "heading": p["heading"], "requested": {"lat": p["lat"], "lng": p["lng"], "heading": p["heading"]},
         "pano_id": meta.get("pano_id"), "date": meta.get("date"), "copyright": meta.get("copyright")}), encoding="utf-8")
     if out.exists():
-no        return 0  # sidecar backfill only
+        return 0  # sidecar backfill only
     r = httpx.get(URL, params={**q, "size": "640x400", "fov": 90, "pitch": 0}, timeout=30)
     r.raise_for_status()
     out.write_bytes(r.content)

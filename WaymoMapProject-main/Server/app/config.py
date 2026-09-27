@@ -20,10 +20,25 @@ def has_frame(seg_id) -> bool:
 # Do not name the Maps key GOOGLE_API_KEY: google-genai treats that as *its* key
 # and ignores GEMINI_API_KEY when both are set.
 GOOGLE_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
-# Ranking + scripts: LiteLLM, OpenAI-compatible (gpt-oss-120b).
+# LiteLLM: one key + base URL for gpt-oss-120b, Glimmer vision, and scripts.
+# sk-… keys are LiteLLM *proxy* virtual keys — set LLM_BASE_URL to your gateway (see .env.example).
 LLM_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
-LLM_BASE = (os.getenv("LLM_BASE_URL") or "").rstrip("/")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
+
+
+def _normalize_llm_base(raw: str) -> str:
+    """OpenAI-compatible root on the LiteLLM proxy (…/v1), not provider URLs like api.openai.com."""
+    raw = (raw or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if raw.endswith("/v1"):
+        return raw
+    return f"{raw}/v1"
+
+
+LLM_BASE = _normalize_llm_base(os.getenv("LLM_BASE_URL") or os.getenv("LITELLM_BASE_URL") or "")
+IDENTIFY_MODEL = os.getenv("IDENTIFY_MODEL", "meta-muse-glimmer-30b")
+VERIFY_GAP = float(os.getenv("VERIFY_GAP", "2"))
 if LLM_KEY:
     os.environ["OPENAI_API_KEY"] = LLM_KEY
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
