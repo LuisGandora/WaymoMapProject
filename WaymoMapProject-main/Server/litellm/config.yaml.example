@@ -1,0 +1,17 @@
+# Example LiteLLM proxy config (for whoever runs the gateway — not required on every dev laptop).
+# Start: litellm --config litellm/config.yaml --port 4000
+# Then create virtual keys in the UI and share http://<host>:4000/v1 with the team.
+
+model_list:
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: openai/gpt-oss-120b
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: meta-muse-glimmer-30b
+    litellm_params:
+      model: openai/muse-glimmer-30b
+      api_base: os.environ/GLIMMER_API_BASE
+      api_key: os.environ/GLIMMER_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

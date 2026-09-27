@@ -1,4 +1,4 @@
-"""LiteLLM OpenAI-compatible client for gpt-oss-120b (ranking + narration scripts)."""
+"""LiteLLM OpenAI-compatible client (ranking, scripts, Glimmer vision)."""
 import base64
 import json
 import os
@@ -46,22 +46,39 @@ def _message_text(msg):
     return text
 
 
-def complete(messages, *, json_object=False, timeout=60):
-    """One chat completion via LiteLLM (OpenAI-shaped). Returns assistant text."""
-    assert config.LLM_KEY, "set LLM_API_KEY (or OPENAI_API_KEY) in Server/.env"
-    os.environ["OPENAI_API_KEY"] = config.LLM_KEY
+def _prepare_model(model: str, base: str) -> str:
+    """LiteLLM proxy: use the gateway model id, not provider-native meta/ routing."""
+    if base and model.startswith("meta/"):
+        return model.split("/", 1)[1]
+    return model
+
+
+def complete(messages, *, model=None, api_key=None, api_base=None, json_object=False, timeout=60):
+    """One chat completion via LiteLLM. Same pattern for gpt-oss-120b and Glimmer."""
+    model = model or config.LLM_MODEL
+    api_key = api_key or config.LLM_KEY
+    assert api_key, "set LLM_API_KEY in Server/.env"
+    os.environ["OPENAI_API_KEY"] = api_key
+    base = api_base if api_base is not None else config.LLM_BASE
+    if not base:
+        raise LLMError(
+            400,
+            "LLM_BASE_URL is not set — point it at your LiteLLM proxy …/v1 (see Server/.env.example)",
+        )
+    model = _prepare_model(model, base)
     kwargs = dict(
-        model=config.LLM_MODEL,
+        model=model,
         messages=messages,
         temperature=0.3,
         timeout=timeout,
-        api_key=config.LLM_KEY,
+        api_key=api_key,
         drop_params=True,
     )
     if json_object:
         kwargs["response_format"] = {"type": "json_object"}
-    if config.LLM_BASE:
-        kwargs["api_base"] = config.LLM_BASE
+    if base:
+        kwargs["api_base"] = base
+        kwargs["custom_llm_provider"] = "openai"
     try:
         r = litellm_completion(**kwargs)
     except Exception as e:
@@ -77,8 +94,8 @@ def complete(messages, *, json_object=False, timeout=60):
     return text
 
 
-def complete_json(messages, timeout=60):
-    return _parse_json(complete(messages, json_object=True, timeout=timeout))
+def complete_json(messages, timeout=60, **kwargs):
+    return _parse_json(complete(messages, json_object=True, timeout=timeout, **kwargs))
 
 
 def user_text_and_image(text: str, jpeg: bytes) -> dict:
