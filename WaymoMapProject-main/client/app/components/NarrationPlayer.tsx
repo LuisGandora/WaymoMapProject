@@ -234,7 +234,9 @@ function Transcript({ text, progress, live }: { text: string; progress: number; 
 
 // Floating "now narrating" card over the map.
 export default function NarrationPlayer({ n }: { n: NarrationControls }) {
-  const [showText, setShowText] = useState(true);
+  // Transcript starts closed on phones, where the open card would cover most of the map. Safe for hydration: the
+  // card renders nothing until a narration starts.
+  const [showText, setShowText] = useState(() => typeof window === "undefined" || window.matchMedia("(min-width: 768px)").matches);
   if (!n.current) return null;
   const narr = NARRATIONS[n.current.id];
   const ui = UI[n.current.lang];
@@ -244,7 +246,7 @@ export default function NarrationPlayer({ n }: { n: NarrationControls }) {
   const cued = new Map(n.cues.map((c) => [c.i, c.frac]));
 
   return (
-    <div className="anim-rise absolute bottom-10 left-6 z-20 w-[400px] max-w-[calc(100%-3rem)] rounded-3xl border border-slate-700/70 bg-[#0e1628]/90 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-md">
+    <div className="anim-rise absolute bottom-3 left-2 z-20 w-[400px] max-w-[calc(100%-1rem)] rounded-3xl border border-slate-700/70 bg-[#0e1628]/90 p-4 md:bottom-10 md:left-6 md:max-w-[calc(100%-3rem)] md:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-md">
       <div className="flex items-center gap-4">
         <div
           className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl border transition ${
@@ -372,7 +374,7 @@ export default function NarrationPlayer({ n }: { n: NarrationControls }) {
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-3 flex gap-2 overflow-x-auto [scrollbar-width:none] md:mt-4 md:flex-wrap md:overflow-visible">
         {narr.places.map((p, i) => {
           const active = n.activeIdx === i;
           const jumpable = cued.has(i) && ready;
@@ -383,7 +385,7 @@ export default function NarrationPlayer({ n }: { n: NarrationControls }) {
               disabled={!jumpable}
               onClick={() => n.seekToPlace(i)}
               title={jumpable ? `${ui.jump}: ${p.blurb}` : p.blurb}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] transition duration-300 disabled:cursor-help ${
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[12px] transition duration-300 disabled:cursor-help ${
                 active
                   ? "scale-105 border-cyan-400/80 bg-cyan-500/15 text-cyan-200 shadow-[0_0_14px_rgba(34,211,238,0.3)]"
                   : "border-slate-700/70 bg-[#060b18] text-slate-300 enabled:hover:border-cyan-400/50 enabled:hover:text-cyan-200"

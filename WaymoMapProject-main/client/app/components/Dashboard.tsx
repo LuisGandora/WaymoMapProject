@@ -195,11 +195,12 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-[#030712] text-slate-100">
-      <aside className="flex w-1/4 min-w-[360px] shrink-0 flex-col border-r border-slate-800/60 bg-[#0e1628]">
-        <header className="flex items-center gap-4 border-b border-slate-800/70 px-8 py-8">
-          <div className="grid h-[58px] w-[58px] place-items-center rounded-2xl border border-cyan-500/20 bg-[#0c2a3a] text-cyan-400">
-            <svg viewBox="0 0 24 24" className="h-8 w-8 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
+    // Phones stack the map on top and the controls underneath (one scroll); md+ keeps the sidebar beside the map.
+    <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#030712] text-slate-100 md:h-screen md:flex-row">
+      <aside className="order-2 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-slate-800/60 bg-[#0e1628] md:order-none md:w-1/4 md:min-w-[360px] md:flex-none md:shrink-0 md:overflow-visible md:border-r md:border-t-0">
+        <header className="flex items-center gap-4 border-b border-slate-800/70 px-5 py-4 md:px-8 md:py-8">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl border border-cyan-500/20 bg-[#0c2a3a] text-cyan-400 md:h-[58px] md:w-[58px]">
+            <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round] md:h-8 md:w-8">
               <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2" />
               <circle cx="7" cy="17" r="2" />
               <path d="M9 17h6" />
@@ -207,14 +208,14 @@ export default function Dashboard() {
             </svg>
           </div>
           <div>
-            <h1 className="text-[30px] font-extrabold leading-none tracking-tight">
+            <h1 className="text-[24px] font-extrabold leading-none tracking-tight md:text-[30px]">
               Waymo <span className="text-cyan-400">Haven</span>
             </h1>
-            <p className="mt-2 text-[15px] font-medium tracking-[0.08em] text-slate-300">AUTONOMOUS CITY TOURS</p>
+            <p className="mt-1.5 text-[12px] font-medium tracking-[0.08em] text-slate-300 md:mt-2 md:text-[15px]">AUTONOMOUS CITY TOURS</p>
           </div>
         </header>
 
-        <div className="stagger flex-1 space-y-10 overflow-y-auto px-8 py-10">
+        <div className="stagger space-y-7 px-5 py-6 md:flex-1 md:space-y-10 md:overflow-y-auto md:px-8 md:py-10">
           <section>
             <Label
               glyph={
@@ -376,7 +377,7 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <footer className="border-t border-slate-800/70 px-8 py-8">
+        <footer className="border-t border-slate-800/70 px-5 py-5 md:px-8 md:py-8">
           {tour && (
             <div className="mb-4 rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 py-3">
               <div className="flex items-center justify-between gap-3">
@@ -436,7 +437,7 @@ export default function Dashboard() {
           <button
             onClick={() => generate()}
             disabled={loading}
-            className={`${loading ? "shimmer" : ""} relative flex h-[72px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
+            className={`${loading ? "shimmer" : ""} relative flex h-[60px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[19px] md:h-[72px] md:text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
           >
             <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
               <path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z" />
@@ -447,7 +448,7 @@ export default function Dashboard() {
         </footer>
       </aside>
 
-      <main className="relative flex-1 bg-[#030712] bg-[radial-gradient(rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]">
+      <main className="relative order-1 h-[60dvh] shrink-0 bg-[#030712] md:order-none md:h-auto md:flex-1 md:shrink bg-[radial-gradient(rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:28px_28px]">
         <MapPanel
           tour={tour}
           loading={loading}

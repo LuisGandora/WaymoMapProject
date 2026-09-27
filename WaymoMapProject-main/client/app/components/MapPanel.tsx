@@ -105,6 +105,7 @@ export default function MapPanel({
   // The Safer Route card: only when Safer Route actually took the tour off high-injury road compared with the standard route.
   const saferCard = sf && vd && cmp && vd.hin_km < 0 ? { sf, vd, cmp } : null;
   const [showCompare, setShowCompare] = useState(true);
+  const [saferOpen, setSaferOpen] = useState(false); // phones: the card is a one-line summary until tapped (md+ always shows it all)
   const timeCost = (m: number) =>
     m === 0 ? "same time" : Math.abs(m) < 1 ? `${Math.round(Math.abs(m) * 60)} s ${m < 0 ? "faster" : "longer"}` : `${Math.abs(m)} min ${m < 0 ? "faster" : "longer"}`;
   const safetyLine = sf
@@ -157,16 +158,24 @@ export default function MapPanel({
 
       {/* Safer Route card: what this tour avoided compared with the same request with Safer Route off (the gray dashed route). */}
       {saferCard && !cinematic && !riding && (
-        <div key={tour?.id} className="anim-rise absolute right-4 top-24 z-10 w-[300px] rounded-2xl border border-emerald-500/40 bg-[#0e1628]/92 p-4 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur">
-          <div className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-emerald-300">
+        <div key={tour?.id} className={`anim-rise absolute right-2 top-24 z-10 rounded-2xl border border-emerald-500/40 bg-[#0e1628]/92 ${saferOpen ? "w-[min(240px,calc(100%-1rem))] p-3" : "px-3 py-2"} md:right-4 md:top-24 md:w-[300px] md:p-4 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur`}>
+          <button
+            type="button"
+            onClick={() => setSaferOpen((v) => !v)}
+            aria-expanded={saferOpen}
+            className="flex w-full items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-emerald-300 md:pointer-events-none"
+          >
             <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
               <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" />
               <path d="m9 12 2 2 4-4" />
             </svg>
             Safer Route
-          </div>
+            {!saferOpen && <span className="normal-case tracking-normal text-white md:hidden">{Math.abs(saferCard.vd.hin_km).toFixed(1)} km safer</span>}
+            <span className="ml-auto text-slate-400 md:hidden">{saferOpen ? "▴" : "▾"}</span>
+          </button>
+          <div className={`${saferOpen ? "" : "hidden"} md:block`}>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="whitespace-nowrap text-[34px] font-extrabold leading-none tracking-tight text-white">{Math.abs(saferCard.vd.hin_km).toFixed(1)} km</span>
+            <span className="whitespace-nowrap text-[24px] md:text-[34px] font-extrabold leading-none tracking-tight text-white">{Math.abs(saferCard.vd.hin_km).toFixed(1)} km</span>
             <span className="text-[13px] leading-tight text-slate-300">less driving on high-injury corridors</span>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-[13px]">
@@ -182,24 +191,25 @@ export default function MapPanel({
             </div>
           </div>
           {saferCard.cmp.corridors.length > 0 && (
-            <p className="mt-3 text-[12px] leading-snug text-slate-300">
+            <p className="mt-3 hidden text-[12px] leading-snug text-slate-300 md:block">
               Skips {saferCard.cmp.corridors.join(" · ")}
               {saferCard.cmp.avoided_ksi > 0 && `: ${saferCard.cmp.avoided_ksi} serious or fatal crashes there since 2019`}
             </p>
           )}
-          <div className="mt-3 space-y-1 text-[11px] text-slate-400">
+          <div className="mt-3 hidden space-y-1 text-[11px] text-slate-400 md:block">
             <div className="flex items-center gap-2"><span className="inline-block w-5 shrink-0 border-t-[3px] border-dashed border-slate-400" />Standard route (Safer Route off)</div>
             <div className="flex items-center gap-2"><span className="inline-block h-1 w-5 shrink-0 rounded bg-red-400 shadow-[0_0_8px_#ef4444]" />High-injury road it would drive</div>
           </div>
           <button onClick={() => setShowCompare((v) => !v)} className="mt-3 w-full rounded-lg border border-slate-700 py-1.5 text-[12px] text-slate-300 hover:border-emerald-400/60">
             {showCompare ? "Hide" : "Show"} standard route
           </button>
+          </div>
         </div>
       )}
 
       {/* Title card for the place being narrated, re-animated for each new place. */}
       {shownStory && (
-        <div key={shownStory.key} className="pointer-events-none absolute bottom-[calc(7vh+28px)] right-16 z-10 max-w-[46%] text-right">
+        <div key={shownStory.key} className="pointer-events-none absolute bottom-[calc(7vh+28px)] right-3 z-10 max-w-[75%] text-right md:right-16 md:max-w-[46%]">
           <p className="anim-title text-[12px] font-semibold uppercase tracking-[0.3em] text-cyan-300/90">{shownStory.label}</p>
           <p className="anim-title mt-1 text-[clamp(26px,3.2vw,44px)] font-extrabold leading-[1.05] tracking-tight text-white [text-shadow:0_4px_30px_rgba(0,0,0,0.8)]" style={{ animationDelay: "0.12s" }}>
             {shownStory.place.name}
@@ -213,9 +223,9 @@ export default function MapPanel({
 
       {/* Ride mode: the stop the car just reached (photo + why), and the ride bar with what Safer Route is steering around. */}
       {riding && rideStop && (
-        <div key={rideStop.id} className="anim-rise absolute left-6 top-24 z-20 w-[min(340px,40%)] overflow-hidden rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur">
+        <div key={rideStop.id} className="anim-rise absolute left-2 top-24 z-20 w-[min(220px,60%)] md:left-6 md:top-24 md:w-[min(340px,40%)] overflow-hidden rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur">
           {/* eslint-disable-next-line @next/next/no-img-element -- served by our own API */}
-          {rideStop.photo && <img src={media(rideStop.photo)!} alt="" className="h-[170px] w-full object-cover" />}
+          {rideStop.photo && <img src={media(rideStop.photo)!} alt="" className="h-[110px] w-full object-cover md:h-[170px]" />}
           <div className="p-4">
             <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-300">
               {rideStop.id === tour?.dest_id ? "Destination" : `Stop ${(ride?.stop ?? 0) + 1} of ${tour?.dest_id ? last - 1 : last}`}
@@ -228,7 +238,7 @@ export default function MapPanel({
         </div>
       )}
       {riding && ride && (
-        <div className="absolute bottom-10 left-1/2 z-20 w-[min(620px,86%)] -translate-x-1/2 rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 px-5 py-3 shadow-lg backdrop-blur">
+        <div className="absolute bottom-3 left-1/2 z-20 w-[calc(100%-1rem)] md:bottom-10 md:w-[min(620px,86%)] -translate-x-1/2 rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 px-5 py-3 shadow-lg backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.18em] text-cyan-300">
               <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
@@ -246,7 +256,7 @@ export default function MapPanel({
       )}
 
       {tour && last > 0 && !riding && (
-        <div className="absolute bottom-10 left-1/2 z-10 w-[min(560px,80%)] -translate-x-1/2 rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-5 py-3 shadow-lg backdrop-blur">
+        <div className="absolute bottom-3 left-1/2 z-10 w-[calc(100%-1rem)] -translate-x-1/2 rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-3 py-2 md:bottom-10 md:w-[min(560px,80%)] md:px-5 md:py-3 shadow-lg backdrop-blur">
           <button
             onClick={startRide}
             className="mb-2.5 flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[14px] font-bold text-white shadow-[0_6px_18px_rgba(6,182,212,0.3)] transition hover:brightness-110"
@@ -279,7 +289,7 @@ export default function MapPanel({
         </div>
       )}
       <div
-        className={`pointer-events-none absolute left-1/2 top-6 z-[60] -translate-x-1/2 rounded-full border px-5 py-2.5 text-[14px] shadow-lg backdrop-blur ${
+        className={`pointer-events-none absolute right-2 top-4 z-[60] max-w-[calc(100%-10.5rem)] rounded-2xl border px-3 py-1.5 text-[12px] md:left-1/2 md:right-auto md:top-6 md:max-w-none md:-translate-x-1/2 md:rounded-full md:px-5 md:py-2.5 md:text-[14px] shadow-lg backdrop-blur ${
           error ? "border-red-500/60 bg-red-950/80 text-red-200" : "border-slate-700/70 bg-[#0e1628]/85 text-slate-300"
         }`}
       >
