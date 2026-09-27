@@ -4,7 +4,7 @@ services:
   - type: web
     name: waymo-tour-api
     runtime: python
-    plan: free
+    plan: starter  # $7/mo: no sleeping; Render syncs this file, so keep it matching the dashboard
     rootDir: WaymoMapProject-main/Server
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
