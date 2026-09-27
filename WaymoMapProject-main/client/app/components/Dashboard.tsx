@@ -66,7 +66,7 @@ const icon = "h-5 w-5 fill-none stroke-current stroke-2 [stroke-linecap:round] [
 
 function Label({ children, glyph }: { children: ReactNode; glyph: ReactNode }) {
   return (
-    <label className="mb-3 flex items-center gap-2.5 text-[17px] text-slate-100">
+    <label className="mb-2 flex items-center gap-2.5 text-[15px] text-slate-100 md:text-[16px]">
       <span className="text-cyan-400">{glyph}</span>
       {children}
     </label>
@@ -87,7 +87,7 @@ function Select<T extends string>({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className="h-[62px] w-full cursor-pointer appearance-none rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 pr-12 text-[17px] text-slate-100 outline-none transition focus:border-cyan-400/70"
+        className="h-[52px] w-full cursor-pointer appearance-none rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 pr-12 text-[16px] text-slate-100 outline-none transition focus:border-cyan-400/70"
       >
         {options.map((o) => (
           <option key={o.id} value={o.id} className="bg-[#0b1224]">
@@ -198,7 +198,7 @@ export default function Dashboard() {
     // Phones stack the map on top and the controls underneath (one scroll); md+ keeps the sidebar beside the map.
     <div className="flex h-dvh w-full flex-col overflow-hidden bg-[#030712] text-slate-100 md:h-screen md:flex-row">
       <aside className="order-2 flex min-h-0 flex-1 flex-col overflow-y-auto border-t border-slate-800/60 bg-[#0e1628] md:order-none md:w-1/4 md:min-w-[360px] md:flex-none md:shrink-0 md:overflow-visible md:border-r md:border-t-0">
-        <header className="flex items-center gap-4 border-b border-slate-800/70 px-5 py-4 md:px-8 md:py-8">
+        <header className="flex items-center gap-4 border-b border-slate-800/70 px-5 py-4 md:px-8 md:py-6">
           <div className="grid h-11 w-11 place-items-center rounded-2xl border border-cyan-500/20 bg-[#0c2a3a] text-cyan-400 md:h-[58px] md:w-[58px]">
             <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round] md:h-8 md:w-8">
               <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2" />
@@ -215,7 +215,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <div className="stagger space-y-7 px-5 py-6 md:flex-1 md:space-y-10 md:overflow-y-auto md:px-8 md:py-10">
+        <div className="stagger space-y-6 px-5 py-5 md:min-h-0 md:flex-1 md:space-y-7 md:overflow-y-auto md:px-8 md:py-7">
           <section>
             <Label
               glyph={
@@ -365,7 +365,7 @@ export default function Dashboard() {
                 if (voice) narration.stop();
                 setVoice(!voice);
               }}
-              className={`flex h-[62px] w-full items-center justify-between rounded-2xl border px-5 text-left transition ${
+              className={`flex w-full items-center justify-between rounded-2xl border px-5 py-3 text-left transition ${
                 voice ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
               }`}
             >
@@ -377,38 +377,36 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <footer className="border-t border-slate-800/70 px-5 py-5 md:px-8 md:py-8">
+        <footer className="border-t border-slate-800/70 px-5 py-4 md:px-8 md:py-5">
           {tour && (
-            <div className="mb-4 rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[14px] text-slate-300">
-                  {(tour.options ?? 1) > 1 ? (
-                    <>
-                      Route <b className="text-cyan-300">{(tour.rank ?? 0) + 1}</b> of {tour.options}
-                      <span className="block text-[12px] text-slate-500">best scenery for the quickest trip first</span>
-                    </>
-                  ) : (
-                    <>
-                      Your route
-                      <span className="block text-[12px] text-slate-500">{tour.dest_id ? "one-way to your destination" : "the only route for these settings"}</span>
-                    </>
-                  )}
-                </span>
-                {(tour.options ?? 1) > 1 && (
-                  <button
-                    onClick={() => generate(((tour.rank ?? 0) + 1) % tour.options!)}
-                    disabled={loading}
-                    className="h-10 shrink-0 rounded-xl border border-cyan-400/60 bg-cyan-500/10 px-4 text-[14px] font-bold text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    Skip →
-                  </button>
+            // One compact row, so the settings above keep their room while a route is on the map.
+            <div className="mb-3 flex items-center gap-2 rounded-2xl border border-slate-700/70 bg-[#060b18] py-2 pl-4 pr-2">
+              <span className="min-w-0 flex-1 truncate text-[14px] text-slate-300" title={(tour.options ?? 1) > 1 ? "Best scenery for the quickest trip first" : undefined}>
+                {(tour.options ?? 1) > 1 ? (
+                  <>
+                    Route <b className="text-cyan-300">{(tour.rank ?? 0) + 1}</b> of {tour.options}
+                  </>
+                ) : tour.dest_id ? (
+                  "One-way to your destination"
+                ) : (
+                  "Your route"
                 )}
-              </div>
+              </span>
+              {(tour.options ?? 1) > 1 && (
+                <button
+                  onClick={() => generate(((tour.rank ?? 0) + 1) % tour.options!)}
+                  disabled={loading}
+                  className="h-9 shrink-0 rounded-xl border border-cyan-400/60 bg-cyan-500/10 px-3 text-[13px] font-bold text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-50"
+                >
+                  Next route →
+                </button>
+              )}
               <button
                 onClick={exitRoute}
-                className="mt-3 h-9 w-full rounded-xl border border-slate-700/70 text-[13px] text-slate-300 transition hover:border-red-400/60 hover:text-red-300"
+                title="Exit route"
+                className="h-9 shrink-0 rounded-xl border border-slate-700/70 px-3 text-[13px] text-slate-300 transition hover:border-red-400/60 hover:text-red-300"
               >
-                ✕ Exit route
+                ✕ Exit
               </button>
             </div>
           )}
@@ -418,7 +416,7 @@ export default function Dashboard() {
             role="switch"
             aria-checked={settings.safe}
             onClick={() => set("safe", !settings.safe)}
-            className={`mb-4 flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+            className={`mb-3 flex w-full items-center gap-3 rounded-2xl border px-4 py-2.5 text-left transition ${
               settings.safe ? "border-emerald-400/70 bg-emerald-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
             }`}
           >
@@ -428,7 +426,9 @@ export default function Dashboard() {
             </svg>
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] font-bold text-slate-100">Safer Route</span>
-              <span className="block text-[12px] leading-tight text-slate-400">Avoids Miami-Dade&apos;s high-injury corridors and big arterials, and flood zones during flood alerts</span>
+              <span className="block truncate text-[12px] leading-tight text-slate-400" title="Avoids Miami-Dade's high-injury corridors and big arterials, and flood zones during flood alerts">
+                Avoids high-injury roads &amp; flood zones
+              </span>
             </span>
             <span className={`shrink-0 rounded-full px-3 py-1 text-[13px] font-bold ${settings.safe ? "bg-emerald-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
               {settings.safe ? "ON" : "OFF"}
@@ -437,7 +437,7 @@ export default function Dashboard() {
           <button
             onClick={() => generate()}
             disabled={loading}
-            className={`${loading ? "shimmer" : ""} relative flex h-[60px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[19px] md:h-[72px] md:text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
+            className={`${loading ? "shimmer" : ""} relative flex h-[60px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[19px] md:h-[64px] md:text-[20px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
           >
             <svg viewBox="0 0 24 24" className="h-6 w-6 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]">
               <path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z" />
@@ -468,8 +468,8 @@ export default function Dashboard() {
             setTour(null);
             setError(null);
           }}
+          player={narration.current ? <NarrationPlayer n={narration} /> : null}
         />
-        <NarrationPlayer n={narration} />
       </main>
     </div>
   );

@@ -4,6 +4,9 @@ import threading
 from functools import lru_cache
 
 import networkx as nx
+from shapely import STRtree
+from shapely.geometry import LineString, Point
+from shapely.ops import substring
 
 from . import config, graph, narrate, router, safety, store
 
@@ -21,7 +24,7 @@ SPUR_M = 60
 # that makes the whole loop shortest (no more driving a block backwards to its sampled start and then forwards again).
 # Planning still uses the matrix's fixed direction, so no matrix rebuild is needed. False = always the sampled direction.
 TWO_WAY_BLOCKS = True
-ROUTER_VERSION = 8  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request (8: hin_driven + compare)
+ROUTER_VERSION = 9  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request (9: picked start/destination snap to the street itself)
 
 
 # Where a tour's scenic scores come from. "photo": Street View frames rated by AI (the original pipeline, data/).
@@ -136,6 +139,52 @@ def snap(lat, lng, max_m=250, pts=None):
     return p
 
 
+def _edge_line(G, u, v):
+    d = graph.best_edge(G, u, v)
+    return d["geometry"] if "geometry" in d else LineString([(G.nodes[u]["x"], G.nodes[u]["y"]), (G.nodes[v]["x"], G.nodes[v]["y"])])
+
+
+@lru_cache
+def _edge_index():
+    """Every drivable street piece (one per u->v) and a spatial index over their shapes, for snap_street."""
+    G = graph.get()
+    keys = list({(u, v) for u, v in G.edges()})
+    lines = [_edge_line(G, u, v) for u, v in keys]
+    return keys, lines, STRtree(lines)
+
+
+def snap_street(lat, lng, max_m=150):
+    """The point on the nearest drivable street to a spot picked on the map, so a tour starts or ends where the rider
+    clicked (not at the corner of the nearest scored block, which can be 200+ m away). ValueError if no street is close."""
+    keys, lines, tree = _edge_index()
+    p = Point(lng, lat)
+    i = int(tree.nearest(p))
+    (u, v), line = keys[i], lines[i]
+    at = line.interpolate(line.project(p))
+    if router.haversine_m((lat, lng), (at.y, at.x)) > max_m:
+        raise ValueError("no street near that spot; pick a spot on a street inside the service area")
+    name = graph.best_edge(graph.get(), u, v).get("name") or ""
+    return {"u": u, "v": v, "lat": at.y, "lng": at.x, "street": name[0] if isinstance(name, list) else name, "d": line.project(p), "len": line.length}
+
+
+def _leave(G, s):
+    """Ways to drive off a snapped point to a graph node: [(node, coords point->node, fraction of the edge, (a, b))]."""
+    line = _edge_line(G, s["u"], s["v"])
+    out = [(s["v"], list(substring(line, s["d"], s["len"]).coords), 1 - s["d"] / s["len"] if s["len"] else 0, (s["u"], s["v"]))]
+    if G.has_edge(s["v"], s["u"]):  # two-way street: may also head the other way
+        out.append((s["u"], list(substring(line, 0, s["d"]).coords)[::-1], s["d"] / s["len"] if s["len"] else 0, (s["v"], s["u"])))
+    return out
+
+
+def _arrive(G, s):
+    """Ways to drive from a graph node onto a snapped point: [(node, coords node->point, fraction of the edge, (a, b))]."""
+    line = _edge_line(G, s["u"], s["v"])
+    out = [(s["u"], list(substring(line, 0, s["d"]).coords), s["d"] / s["len"] if s["len"] else 0, (s["u"], s["v"]))]
+    if G.has_edge(s["v"], s["u"]):
+        out.append((s["v"], list(substring(line, s["d"], s["len"]).coords)[::-1], 1 - s["d"] / s["len"] if s["len"] else 0, (s["v"], s["u"])))
+    return out
+
+
 def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="photo"):
     """Same (mood, minutes, start, safe, at, to, rank, source) returns the stored tour instead of rebuilding.
 
@@ -158,10 +207,20 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="ph
     weight = "safe_time" if safe else "travel_time"
     nodes = dict(M["nodes"])
     photo_src = source == "photo"
-    o = (snap if photo_src else snap_node)(*(at or config.HOODS[start]["start"]))  # popular: any street can be the start
+    # A spot picked on the map starts the tour on the street right there (the piece of street from that spot to the next
+    # corner is drawn and timed too); the default start is the neighborhood's photographed block, as before.
+    pick_s = snap_street(*at) if at else None
+    pick_e = snap_street(*to) if to else None
+    if pick_s and pick_e and router.haversine_m((pick_s["lat"], pick_s["lng"]), (pick_e["lat"], pick_e["lng"])) < 40:
+        raise ValueError("the start and the destination are the same spot")
+    part_w = lambda opt, w: opt[2] * graph.best_edge(G, *opt[3])[w] if opt else 0.0  # cost of driving part of an edge
+    lead = tail = None  # (node, coords, fraction, edge): the partial street before the first corner / after the last one
+    if pick_s:
+        o = {"id": "pick", "u": None, "lat": pick_s["lat"], "lng": pick_s["lng"], "street": pick_s["street"]}
+    else:
+        o = (snap if photo_src else snap_node)(*config.HOODS[start]["start"])  # popular: any street can be the start
     K0 = "start"
-    nodes[K0] = {"enter": o["u"], "exit": o["u"], "traverse": 0}
-    minutes_of = lambda es: sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) / 60  # real minutes on the drawn road
+    minutes_of = lambda es: (sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) + part_w(lead, "travel_time") + part_w(tail, "travel_time")) / 60  # real minutes on the drawn road
 
     hops = {}
 
@@ -173,6 +232,22 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="ph
             except (nx.NetworkXNoPath, nx.NodeNotFound):  # NodeNotFound: data built on a bigger graph than this one
                 hops[(w, a, b)] = (router.INF, None)
         return hops[(w, a, b)]
+
+    if to:
+        # Which way to pull off the start spot and onto the destination spot (a two-way street allows both): the pair that
+        # makes the whole drive cheapest, so the route never starts by going the long way around the block.
+        starts = _leave(G, pick_s) if pick_s else [(o["u"], [], 0.0, None)]
+        best = min(((part_w(ls, weight) + hop(weight, ls[0], ar[0])[0] + part_w(ar, weight), ls, ar) for ls in starts for ar in _arrive(G, pick_e)),
+                   key=lambda x: x[0])
+        if best[0] >= router.INF:
+            raise ValueError("no drivable route between the start and that spot")
+        lead, tail = (best[1] if pick_s else None), best[2]
+    elif pick_s:
+        lead = min(_leave(G, pick_s), key=lambda ls: ls[2])  # a loop pulls off toward the nearer corner
+        tail = next((ar for ar in _arrive(G, pick_s) if ar[0] == lead[0]), None)  # and comes back onto the spot if the street allows it
+    if lead:
+        o["u"] = lead[0]
+    nodes[K0] = {"enter": o["u"], "exit": o["u"], "traverse": 0}
 
     def ways(k):
         """How the block of route entry k may be driven: [(enter, exit)], sampled direction first; both if two-way."""
@@ -236,13 +311,9 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="ph
     if to:
         # One-way (the rider picked a destination on the map): exactly the road from the start to it. Nothing before
         # the start, nothing after the destination, no detours; a shortest path never revisits a spot, so no cycles.
-        e = snap(*to) if photo_src else snap(*to, pts=list(segs.values()))
-        if e["id"] not in segs:
-            raise ValueError("that end point is on a street with no scenic score; pick another")
-        if e["u"] == o["u"]:
-            raise ValueError("the start and the destination are the same spot")
-        END = e["id"]
-        nodes[END] = {"enter": e["u"], "exit": e["u"], "traverse": 0}  # the path stops at the block's near end
+        # The destination is the spot the rider picked, on whatever street it is (it doesn't need a scenic score).
+        END = "dest"
+        nodes[END] = {"enter": tail[0], "exit": tail[0], "traverse": 0}  # the corner before the destination spot; `tail` drives the rest
         route = [K0, END]
         edges = drive(weight)
         total = minutes_of(edges)
@@ -321,13 +392,16 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="ph
                    "min_stop_score": MIN_STOP_SCORE, "two_way_blocks": TWO_WAY_BLOCKS}
     fastest = drive("travel_time") if safe else edges
 
-    coords, frames, dist = [], [], 0
+    coords, frames, dist = list(lead[1]) if lead else [], [], 0  # a picked start: from the spot itself to the first corner
+    dist += sum(p[2] * graph.best_edge(G, *p[3])["length"] for p in (lead, tail) if p)
     for a, b in edges:
         d = graph.best_edge(G, a, b)
         dist += d["length"]
         pts = list(d["geometry"].coords) if "geometry" in d else [(G.nodes[a]["x"], G.nodes[a]["y"]), (G.nodes[b]["x"], G.nodes[b]["y"])]
         coords += pts[1:] if coords and coords[-1] == pts[0] else pts
         frames += _frames_on(a, b)
+    if tail:  # and from the last corner onto the picked destination (or back onto a picked loop start)
+        coords += tail[1][1:] if coords and coords[-1] == tail[1][0] else tail[1]
 
     if to:
         want = config.mood_tags(mood)  # the numbered stops are the best blocks the road passes; None = any
@@ -339,6 +413,11 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="ph
         ids = route[1:-1]  # the loop's stops in driving order; the start is not a stop
     stops = []
     for k in ids:
+        if k == END:  # the picked destination: the spot itself, on whatever street it is
+            stops.append({"id": END, "lat": pick_e["lat"], "lng": pick_e["lng"], "street": pick_e["street"], "score": 0, "tags": [],
+                          "frame_idx": None, "photo": None, "why": f"Your destination{' on ' + pick_e['street'] if pick_e['street'] else ''}",
+                          "script": {}, "audio": {}})
+            continue
         s = segs[k]
         idx = next((i for i, f in enumerate(frames) if f["segment"] == k), None)
         stop = {

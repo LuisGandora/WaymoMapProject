@@ -98,8 +98,9 @@ export const saferCompare = (tour: Tour | null) =>
 // Ride mode / narration should use this list too.
 export function highlights(tour: Tour): Stop[] {
   const n = Math.max(4, Math.round(tour.minutes / 4));
-  const keep = new Set([...tour.stops].sort((a, b) => b.score - a.score).slice(0, n).map((s) => s.id));
-  return tour.stops.filter((s) => keep.has(s.id));
+  const scenic = tour.stops.filter((s) => s.id !== tour.dest_id); // a one-way tour's destination is where it ends, not a highlight
+  const keep = new Set([...scenic].sort((a, b) => b.score - a.score).slice(0, n).map((s) => s.id));
+  return scenic.filter((s) => keep.has(s.id));
 }
 
 // The stops the map numbers and the step bar walks through, in route order. A one-way tour always ends on its destination.

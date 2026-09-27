@@ -146,12 +146,20 @@ function overview(map: MLMap, tour: Tour, duration: number) {
   const all = cmp ? [...tour.path.coordinates, ...cmp.path.coordinates] : tour.path.coordinates; // keep the gray standard route in frame too
   const xs = all.map((c) => c[0]);
   const ys = all.map((c) => c[1]);
+  // Room for what floats over the map: the status pill (top), the narration player + step bar dock (bottom), and the
+  // Safer Route card (right). Sized from the map itself: fixed desktop paddings don't fit a phone's map, and then
+  // cameraForBounds gives up and the route is never framed.
+  const el = map.getContainer();
+  const W = el.clientWidth, H = el.clientHeight;
+  const pad = W < 768
+    ? { top: 90, bottom: Math.round(H * 0.3), left: 24, right: 24 }
+    : { top: 110, bottom: Math.min(260, Math.round(H * 0.35)), left: 90, right: cmp ? Math.min(340, Math.round(W * 0.3)) : 90 };
   const cam = map.cameraForBounds(
     [
       [Math.min(...xs), Math.min(...ys)],
       [Math.max(...xs), Math.max(...ys)],
     ],
-    cmp ? { padding: { top: 110, bottom: 150, left: 120, right: 340 } } : { padding: { top: 110, bottom: 110, left: 460, right: 90 } }, // leave room for the Safer Route card on the right
+    { padding: pad },
   );
   if (!cam) return;
   map.flyTo({ ...cam, zoom: (cam.zoom ?? 13) - 0.2, pitch: 48, bearing: -18, duration, curve: 1.4, essential: true });

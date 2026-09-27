@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { highlights, leg, media, narrateSpot, navStops, saferCompare, type LayerVis, type LatLng, type Tour } from "../lib/api";
 import Legend from "./Legend";
 import type { Story } from "./NarrationPlayer";
@@ -30,6 +30,7 @@ export default function MapPanel({
   language = "en",
   spotVoice = false,
   onSpotPlay,
+  player,
 }: {
   tour: Tour | null;
   loading: boolean;
@@ -43,6 +44,7 @@ export default function MapPanel({
   language?: string;
   spotVoice?: boolean; // narrate each spot the rider steps to (one ElevenLabs call per spot, via the backend)
   onSpotPlay?: () => void; // a spot's voice is about to play: the caller stops any other narration
+  player?: ReactNode; // the narration player: shares the bottom dock with the ride / step bar so the two never overlap
 }) {
   // Step bar: 0 = the start, then each numbered stop, ending on the destination for a one-way tour.
   // Keyed to the tour so a new tour resets it.
@@ -93,7 +95,7 @@ export default function MapPanel({
     : error
       ? `Couldn't build tour: ${error}`
       : tour
-        ? `${highlights(tour).length} highlights · ${tour.summary.distance_km} km · ${tour.summary.drive_minutes} min`
+        ? `${highlights(tour).length} highlight${highlights(tour).length === 1 ? "" : "s"} · ${tour.summary.distance_km} km · ${tour.summary.drive_minutes} min`
         : "Select options and generate to map your tour";
   // The intro script names landmarks; only fly to (and title-card) the ones near this tour, never across town
   // (e.g. the "landmarks" script's South Beach while the tour is in Wynwood). About 2 km, in degrees.
@@ -209,7 +211,7 @@ export default function MapPanel({
 
       {/* Title card for the place being narrated, re-animated for each new place. */}
       {shownStory && (
-        <div key={shownStory.key} className="pointer-events-none absolute bottom-[calc(7vh+28px)] right-3 z-10 max-w-[75%] text-right md:right-16 md:max-w-[46%]">
+        <div key={shownStory.key} className="pointer-events-none absolute right-3 top-24 z-10 max-w-[75%] text-right md:right-6 md:top-28 md:max-w-[46%]">
           <p className="anim-title text-[12px] font-semibold uppercase tracking-[0.3em] text-cyan-300/90">{shownStory.label}</p>
           <p className="anim-title mt-1 text-[clamp(26px,3.2vw,44px)] font-extrabold leading-[1.05] tracking-tight text-white [text-shadow:0_4px_30px_rgba(0,0,0,0.8)]" style={{ animationDelay: "0.12s" }}>
             {shownStory.place.name}
@@ -237,8 +239,11 @@ export default function MapPanel({
           </div>
         </div>
       )}
+      {/* Bottom dock: the narration player and the ride / step bar side by side (stacked on phones), so neither covers the other. */}
+      <div className="pointer-events-none absolute inset-x-2 bottom-3 z-20 flex flex-col gap-2 md:left-6 md:right-16 md:bottom-8 md:flex-row md:items-end md:justify-center md:gap-4">
+      {player && <div className="pointer-events-auto md:w-[380px] md:shrink-0">{player}</div>}
       {riding && ride && (
-        <div className="absolute bottom-3 left-1/2 z-20 w-[calc(100%-1rem)] md:bottom-10 md:w-[min(620px,86%)] -translate-x-1/2 rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 px-5 py-3 shadow-lg backdrop-blur">
+        <div className="pointer-events-auto rounded-2xl border border-cyan-500/30 bg-[#0e1628]/92 px-5 py-3 shadow-lg backdrop-blur md:min-w-0 md:max-w-[620px] md:flex-1">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.18em] text-cyan-300">
               <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
@@ -256,10 +261,10 @@ export default function MapPanel({
       )}
 
       {tour && last > 0 && !riding && (
-        <div className="absolute bottom-3 left-1/2 z-10 w-[calc(100%-1rem)] -translate-x-1/2 rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-3 py-2 md:bottom-10 md:w-[min(560px,80%)] md:px-5 md:py-3 shadow-lg backdrop-blur">
+        <div className="pointer-events-auto rounded-2xl border border-slate-700/70 bg-[#0e1628]/90 px-3 py-2 shadow-lg backdrop-blur md:min-w-0 md:max-w-[560px] md:flex-1 md:px-5 md:py-3">
           <button
             onClick={startRide}
-            className="mb-2.5 flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[14px] font-bold text-white shadow-[0_6px_18px_rgba(6,182,212,0.3)] transition hover:brightness-110"
+            className="mb-2 flex h-9 w-full items-center justify-center gap-2 rounded-xl md:mb-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 text-[14px] font-bold text-white shadow-[0_6px_18px_rgba(6,182,212,0.3)] transition hover:brightness-110"
           >
             ▶ Ride the tour
           </button>
@@ -270,7 +275,7 @@ export default function MapPanel({
             </span>
             <button onClick={() => setStep(Math.min(last, (step ?? -1) + 1))} disabled={step === last} className="rounded-lg border border-slate-700 px-2.5 py-1 disabled:opacity-30">▶</button>
           </div>
-          <input type="range" min={0} max={last} step={1} value={cur} onChange={(e) => setStep(Number(e.target.value))} className="w-full accent-cyan-400" aria-label="Step through the route" />
+          <input type="range" min={0} max={last} step={1} value={cur} onChange={(e) => setStep(Number(e.target.value))} className="hidden w-full accent-cyan-400 md:block" aria-label="Step through the route" />
           <div className="mt-1.5 text-center text-[12px] text-cyan-300">
             {next ? `Head ${next.dir}, about ${next.km.toFixed(1)} km to ${nav[cur].street || "the next stop"}` : step != null ? "You've arrived" : ""}
           </div>
@@ -288,6 +293,7 @@ export default function MapPanel({
           )}
         </div>
       )}
+      </div>
       <div
         className={`pointer-events-none absolute right-2 top-4 z-[60] max-w-[calc(100%-10.5rem)] rounded-2xl border px-3 py-1.5 text-[12px] md:left-1/2 md:right-auto md:top-6 md:max-w-none md:-translate-x-1/2 md:rounded-full md:px-5 md:py-2.5 md:text-[14px] shadow-lg backdrop-blur ${
           error ? "border-red-500/60 bg-red-950/80 text-red-200" : "border-slate-700/70 bg-[#0e1628]/85 text-slate-300"

@@ -234,9 +234,9 @@ function Transcript({ text, progress, live }: { text: string; progress: number; 
 
 // Floating "now narrating" card over the map.
 export default function NarrationPlayer({ n }: { n: NarrationControls }) {
-  // Transcript starts closed on phones, where the open card would cover most of the map. Safe for hydration: the
-  // card renders nothing until a narration starts.
-  const [showText, setShowText] = useState(() => typeof window === "undefined" || window.matchMedia("(min-width: 768px)").matches);
+  // Transcript starts closed on phones and short laptop screens, where the open card would cover much of the map. Safe
+  // for hydration: the card renders nothing until a narration starts.
+  const [showText, setShowText] = useState(() => typeof window === "undefined" || window.matchMedia("(min-width: 768px) and (min-height: 900px)").matches);
   if (!n.current) return null;
   const narr = NARRATIONS[n.current.id];
   const ui = UI[n.current.lang];
@@ -246,10 +246,10 @@ export default function NarrationPlayer({ n }: { n: NarrationControls }) {
   const cued = new Map(n.cues.map((c) => [c.i, c.frac]));
 
   return (
-    <div className="anim-rise absolute bottom-3 left-2 z-20 w-[400px] max-w-[calc(100%-1rem)] rounded-3xl border border-slate-700/70 bg-[#0e1628]/90 p-4 md:bottom-10 md:left-6 md:max-w-[calc(100%-3rem)] md:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-md">
+    <div className="anim-rise w-full rounded-3xl border border-slate-700/70 bg-[#0e1628]/90 p-4 md:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-md">
       <div className="flex items-center gap-4">
         <div
-          className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl border transition ${
+          className={`hidden h-12 w-12 shrink-0 place-items-center rounded-2xl border transition md:grid ${
             status === "error" ? "border-red-500/40 bg-red-950/60 text-red-300" : "border-cyan-500/30 bg-[#0c2a3a] text-cyan-400"
           } ${playing ? "shadow-[0_0_22px_rgba(34,211,238,0.35)]" : ""}`}
         >
@@ -374,7 +374,7 @@ export default function NarrationPlayer({ n }: { n: NarrationControls }) {
         </div>
       )}
 
-      <div className="mt-3 flex gap-2 overflow-x-auto [scrollbar-width:none] md:mt-4 md:flex-wrap md:overflow-visible">
+      <div className="mt-4 hidden flex-wrap gap-2 md:flex">
         {narr.places.map((p, i) => {
           const active = n.activeIdx === i;
           const jumpable = cued.has(i) && ready;
