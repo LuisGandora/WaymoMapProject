@@ -24,11 +24,9 @@ poly = graph.polygon()
 for h, c in config.HOODS.items():
     assert poly.contains(Point(c["start"][1], c["start"][0])), f"{h} start is outside the service polygon"
 
-# 4) skip: ranks 0..N-1 give N different, spread-out destinations, none over budget
+# 4) the default tour is a loop (the merged-in router): back at the start, no destination, no ranked options
 from app import tour
-ds = [tour.build("murals+sunset", 30, "wynwood", rank=r) for r in range(3)]
-assert len({t["dest_id"] for t in ds}) == 3 and all(t["options"] > 1 and t["summary"]["drive_minutes"] <= 30 for t in ds)
-seg = tour.segments()
-assert all(router.haversine_m((seg[a["dest_id"]]["lat"], seg[a["dest_id"]]["lng"]), (seg[b["dest_id"]]["lat"], seg[b["dest_id"]]["lng"])) >= tour.APART_M
-           for i, a in enumerate(ds) for b in ds[i + 1:])
+t = tour.build("murals+sunset", 30, "wynwood")
+assert t["dest_id"] is None and t["options"] == 1 and t["stops"] and t["summary"]["drive_minutes"] <= 30 * 1.1 + 0.1, t["summary"]
+assert t["path"]["coordinates"][0] == t["path"]["coordinates"][-1], "a loop ends where it starts"
 print("ok")

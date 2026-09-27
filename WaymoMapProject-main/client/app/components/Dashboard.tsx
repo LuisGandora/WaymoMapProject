@@ -29,6 +29,8 @@ export const STARTS = [
 
 export const MIN_MINUTES = 1;
 export const MAX_MINUTES = 30;
+// Time budgets offered: what Wynwood's scored blocks fill cleanly (a 30-min loop already uses every mural block).
+export const DURATIONS = [10, 15, 20, 30] as const;
 
 export type TourSettings = {
   mood: (typeof MOODS)[number]["id"];
@@ -100,7 +102,7 @@ function PickRow({ kind, picking, set, onToggle, onClear }: { kind: "start" | "e
 }
 
 export default function Dashboard() {
-  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 30, safe: true });
+  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 15, safe: true });
   const [tour, setTour] = useState<Tour | null>(null);
   const [startPt, setStartPt] = useState<LatLng | null>(null); // start / destination picked on the map (inside the service area)
   const [endPt, setEndPt] = useState<LatLng | null>(null);
@@ -244,7 +246,7 @@ export default function Dashboard() {
               onClear={() => { setEndPt(null); setTour(null); }}
             />
             <p className="mt-2 text-[13px] text-slate-400">
-              {endPt ? "One-way tour: start to your destination, past scenic blocks on the way." : "Not set: we pick the most scenic destination within your time budget."}
+              {endPt ? "One-way tour: start to your destination, past scenic blocks on the way." : "Not set: a loop of the most scenic blocks that fits your time budget, back to where you started."}
             </p>
           </section>
 
@@ -259,18 +261,21 @@ export default function Dashboard() {
             >
               Time Budget
             </Label>
-            <div className="flex items-center gap-4">
-              <input
-                type="range"
-                min={MIN_MINUTES}
-                max={MAX_MINUTES}
-                step={1}
-                value={settings.minutes}
-                onChange={(e) => set("minutes", Number(e.target.value))}
-                className="h-2 flex-1 cursor-pointer accent-cyan-400"
-                aria-label="Time budget in minutes"
-              />
-              <span className="w-[72px] rounded-xl border border-cyan-400/60 bg-cyan-500/10 py-2 text-center text-[17px] font-bold text-cyan-300">{settings.minutes} min</span>
+            <div className="flex items-center gap-2" role="radiogroup" aria-label="Time budget in minutes">
+              {DURATIONS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.minutes === m}
+                  onClick={() => set("minutes", m)}
+                  className={`flex-1 rounded-xl border py-2 text-center text-[17px] font-bold transition ${
+                    settings.minutes === m ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-300" : "border-slate-700/70 bg-[#060b18] text-slate-300 hover:border-slate-500"
+                  }`}
+                >
+                  {m} min
+                </button>
+              ))}
             </div>
           </section>
 
