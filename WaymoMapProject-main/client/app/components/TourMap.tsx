@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapEvent, type MapLayerMouseEvent, type MapRef } from "react-map-gl/maplibre";
 import type { ExpressionSpecification, GeoJSONSource, Map as MLMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getHazards, getPhotos, getSegments, getServiceArea, media, navStops, type LayerVis, type LatLng, type Stop, type Tour } from "../lib/api";
+import { getHazards, getPhotos, getSegments, getServiceArea, media, navStops, saferCompare, type LayerVis, type LatLng, type Stop, type Tour } from "../lib/api";
 import type { Story } from "./NarrationPlayer";
 
 export const MIAMI = { latitude: 25.7617, longitude: -80.1918 };
@@ -18,6 +18,8 @@ const reducedMotion = () => typeof window !== "undefined" && window.matchMedia("
 // Layer order = draw order. The route/car layers mount first and everything that loads later is inserted
 // below them (beforeId), so the tour always sits on top: buildings < area/hazards/streets < route < car.
 const TOP = "route-glow";
+// The Safer Route comparison (standard route + avoided high-injury pieces) sits just under the tour and over everything else.
+const COMPARE = "standard-route";
 
 // 3D buildings from the basemap's own vector tiles; they rise in as the camera tilts down to street level.
 const buildings3d: LayerProps = {
@@ -82,6 +84,11 @@ const routeLine: LayerProps = { id: "route", type: "line", layout: round, paint:
 // The "Waymo": a glowing dot that leads the route as it draws, then keeps driving the loop.
 const carGlow: LayerProps = { id: "car-glow", type: "circle", paint: { "circle-radius": 16, "circle-color": "#22d3ee", "circle-opacity": 0.35, "circle-blur": 1 } };
 const carDot: LayerProps = { id: "car", type: "circle", paint: { "circle-radius": 6, "circle-color": "#ffffff", "circle-stroke-color": "#22d3ee", "circle-stroke-width": 3 } };
+// Safer Route comparison: the same request with Safer Route off (gray dashes, under the tour) and the High Injury Network
+// pieces that route drives and this one avoids (red, the glow pulses).
+const standardLine: LayerProps = { id: "standard-route", type: "line", layout: round, paint: { "line-color": "#94a3b8", "line-width": 4, "line-opacity": 0.65, "line-dasharray": [1.4, 1.2] } };
+const avoidedGlow: LayerProps = { id: "avoided-glow", type: "line", layout: round, paint: { "line-color": "#ef4444", "line-width": 16, "line-blur": 8, "line-opacity": 0.45 } };
+const avoidedLine: LayerProps = { id: "avoided", type: "line", layout: round, paint: { "line-color": "#f87171", "line-width": 5, "line-opacity": 0.95 } };
 
 const DRAW_MS = 2600;
 const LAP_MS = 45000;
@@ -107,16 +114,44 @@ function pathWalker(coords: [number, number][]) {
   };
 }
 
+// Where each stop sits along the path, as a fraction 0..1: the first path point within ~75 m of it after the previous
+// stop's point (else the nearest one after it), so a loop that passes a spot twice keeps its stops in driving order.
+function stopFractions(coords: [number, number][], stops: { lat: number; lng: number }[]) {
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) {
+    const [x0, y0] = coords[i - 1];
+    const [x1, y1] = coords[i];
+    cum.push(cum[i - 1] + Math.hypot((x1 - x0) * Math.cos((y0 * Math.PI) / 180), y1 - y0));
+  }
+  const total = cum[cum.length - 1] || 1;
+  let from = 0;
+  return stops.map((s) => {
+    const d = (i: number) => Math.hypot((coords[i][0] - s.lng) * Math.cos((s.lat * Math.PI) / 180), coords[i][1] - s.lat);
+    let best = from;
+    for (let i = from; i < coords.length; i++) {
+      if (d(i) < 0.0007) {
+        best = i;
+        break;
+      }
+      if (d(i) < d(best)) best = i;
+    }
+    from = best;
+    return cum[best] / total;
+  });
+}
+
 // Overview of the whole loop, tilted, leaving room for the narration card on the left.
 function overview(map: MLMap, tour: Tour, duration: number) {
-  const xs = tour.path.coordinates.map((c) => c[0]);
-  const ys = tour.path.coordinates.map((c) => c[1]);
+  const cmp = saferCompare(tour);
+  const all = cmp ? [...tour.path.coordinates, ...cmp.path.coordinates] : tour.path.coordinates; // keep the gray standard route in frame too
+  const xs = all.map((c) => c[0]);
+  const ys = all.map((c) => c[1]);
   const cam = map.cameraForBounds(
     [
       [Math.min(...xs), Math.min(...ys)],
       [Math.max(...xs), Math.max(...ys)],
     ],
-    { padding: { top: 110, bottom: 110, left: 460, right: 90 } },
+    cmp ? { padding: { top: 110, bottom: 150, left: 120, right: 340 } } : { padding: { top: 110, bottom: 110, left: 460, right: 90 } }, // leave room for the Safer Route card on the right
   );
   if (!cam) return;
   map.flyTo({ ...cam, zoom: (cam.zoom ?? 13) - 0.2, pitch: 48, bearing: -18, duration, curve: 1.4, essential: true });
@@ -172,10 +207,12 @@ function Pin({ color, label, glow }: { color: string; label: string; glow?: bool
 const GREEN = "#22c55e";
 const RED = "#ef4444";
 
+const ksiDim = { ...ksiDots, paint: { ...("paint" in ksiDots ? ksiDots.paint : {}), "circle-opacity": 0.3, "circle-stroke-opacity": 0.3 } } as LayerProps;
+
 // A hidden layer stays mounted but is neither drawn nor clickable.
 const shown = (l: LayerProps, on: boolean) => ({ ...l, layout: { ...("layout" in l ? l.layout : {}), visibility: on ? "visible" : "none" } }) as LayerProps;
 
-export default function TourMap({ tour, story, cinematic, picking, startPt, endPt, onPick, step, onStep, layerVis = { streets: true, hin: true, flood: true, ksi: true } }: { layerVis?: LayerVis; tour: Tour | null; story: Story; cinematic: boolean; picking: boolean; startPt: LatLng | null; endPt: LatLng | null; onPick: (p: LatLng) => void; step: number | null; onStep: (n: number | null) => void }) {
+export default function TourMap({ tour, story, cinematic, picking, startPt, endPt, onPick, step, onStep, layerVis = { streets: true, hin: true, flood: true, ksi: true }, showCompare = true, ride = false, onRideStop, onRideProgress, onRideEnd }: { layerVis?: LayerVis; showCompare?: boolean; ride?: boolean; onRideStop?: (i: number) => void; onRideProgress?: (p: number) => void; onRideEnd?: () => void; tour: Tour | null; story: Story; cinematic: boolean; picking: boolean; startPt: LatLng | null; endPt: LatLng | null; onPick: (p: LatLng) => void; step: number | null; onStep: (n: number | null) => void }) {
   const mapRef = useRef<MapRef>(null);
   const [area, setArea] = useState<GeoJSON.Feature | null>(null);
   const [hazards, setHazards] = useState<{ hin: GeoJSON.FeatureCollection; flood: GeoJSON.FeatureCollection; ksi?: GeoJSON.FeatureCollection } | null>(null);
@@ -186,6 +223,7 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
   const [arrowReady, setArrowReady] = useState(false);
   // Once the viewer grabs the map, the story camera stops steering until the next tour / narration.
   const userHasCamera = useRef(false);
+  const riding = useRef(false); // ride mode drives the car dot itself, so the lap animation leaves it alone
   // The popup follows `step` (0 = the start pin, then each numbered stop), shared with the step bar in MapPanel.
   const stops: Stop[] = tour ? navStops(tour) : [];
   const ids = ["origin", ...stops.map((s) => s.id)];
@@ -195,16 +233,38 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
   const dest = stops.find((s) => s.id === tour?.dest_id) ?? null;
   const start = tour?.path.coordinates[0];
   const end = dest ? tour?.path.coordinates.at(-1) : undefined; // where the drawn path stops; the destination block's own midpoint is a little past it
-  const under = segments ? "segments" : TOP; // where the hazard and photo layers go: just below the scenic-score streets
+  const under = segments ? "segments" : COMPARE; // where the hazard and photo layers go: just below the scenic-score streets
   const routeData = useMemo<GeoJSON.Feature | GeoJSON.FeatureCollection>(() => (tour ? { type: "Feature", properties: {}, geometry: tour.path } : EMPTY), [tour]);
+  const compare = saferCompare(tour);
+  const standardData = useMemo<GeoJSON.Feature | GeoJSON.FeatureCollection>(() => (compare ? { type: "Feature", properties: {}, geometry: compare.path } : EMPTY), [compare]);
+  const avoidedData = compare?.avoided_hin ?? EMPTY;
+  const comparing = !!compare && showCompare;
+
+  // The avoided high-injury pieces pulse, so the eye finds them.
+  useEffect(() => {
+    if (!comparing || reducedMotion()) return;
+    let raf = 0;
+    const pulse = (now: number) => {
+      const map = mapRef.current?.getMap();
+      if (map?.getLayer("avoided-glow")) map.setPaintProperty("avoided-glow", "line-opacity", 0.2 + 0.4 * (0.5 + 0.5 * Math.sin(now / 320)));
+      raf = requestAnimationFrame(pulse);
+    };
+    raf = requestAnimationFrame(pulse);
+    return () => cancelAnimationFrame(raf);
+  }, [comparing]);
 
   // Static layers, fetched once. Either failing just leaves that layer off; the map still renders.
   useEffect(() => {
     getServiceArea().then(setArea).catch((e) => console.warn("service area:", e));
     getHazards().then(setHazards).catch((e) => console.warn("hazards:", e));
     getPhotos().then(setPhotos).catch((e) => console.warn("photos:", e));
-    getSegments().then(setSegments).catch((e) => console.warn("segments:", e));
   }, []);
+
+  // The scenic heat map shows the scores the current tour was built from (Street View AI or popular online).
+  const scoreSource = tour?.source ?? "photo";
+  useEffect(() => {
+    getSegments(scoreSource).then(setSegments).catch((e) => console.warn("segments:", e));
+  }, [scoreSource]);
 
   // New tour: establishing shot, the route draws itself in, then the car keeps lapping the loop.
   useEffect(() => {
@@ -227,12 +287,66 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
         done = p >= 1;
       }
       const carAt = p < 1 ? eased : ((e - DRAW_MS) / LAP_MS) % 1;
-      (map.getSource("car") as GeoJSONSource | undefined)?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: walk(carAt) } });
+      if (!riding.current) (map.getSource("car") as GeoJSONSource | undefined)?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: walk(carAt) } });
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
   }, [tour]);
+
+  // Ride mode: the car drives the tour once with the camera riding behind it, turning with the street; the panel shows
+  // each stop as the car reaches it (onRideStop gets its index in navStops). Stopping or finishing flies back to the overview.
+  const rideCb = useRef<{ stop?: (i: number) => void; progress?: (p: number) => void; end?: () => void }>({});
+  useEffect(() => {
+    rideCb.current = { stop: onRideStop, progress: onRideProgress, end: onRideEnd };
+  });
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!ride || !tour || !map) return;
+    riding.current = true;
+    userHasCamera.current = true; // the ride owns the camera; the story camera stays out of its way
+    const coords = tour.path.coordinates;
+    const walk = pathWalker(coords);
+    const at = stopFractions(coords, navStops(tour));
+    const dur = Math.min(40000, Math.max(20000, tour.summary.distance_km * 3000)); // about 3 s per km, 20-40 s in all
+    const t0 = performance.now();
+    let raf = 0;
+    let shown = -2;
+    let heading: number | null = null;
+    let reported = 0;
+    const frame = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const [x, y] = walk(p);
+      const [ax, ay] = walk(Math.min(1, p + 0.012));
+      const target = (Math.atan2((ax - x) * Math.cos((y * Math.PI) / 180), ay - y) * 180) / Math.PI;
+      heading = heading == null ? target : heading + ((((target - heading) % 360) + 540) % 360 - 180) * 0.06; // ease into turns
+      (map.getSource("car") as GeoJSONSource | undefined)?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [x, y] } });
+      map.jumpTo({ center: [x, y], bearing: heading, pitch: 62, zoom: 16.4 });
+      const i = at.reduce((k, f, j) => (f <= p + 0.004 ? j : k), -1);
+      if (i !== shown) {
+        shown = i;
+        rideCb.current.stop?.(i);
+      }
+      if (now - reported > 150) {
+        reported = now;
+        rideCb.current.progress?.(p);
+      }
+      if (p >= 1) {
+        rideCb.current.end?.();
+        return;
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(raf);
+      riding.current = false;
+      userHasCamera.current = false;
+      try {
+        overview(map, tour, reducedMotion() ? 0 : 1800);
+      } catch {} // the map may already be gone (page change)
+    };
+  }, [ride, tour]);
 
   // Step bar moved: bring that stop into view.
   useEffect(() => {
@@ -320,17 +434,24 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
         <Layer {...carGlow} />
         <Layer {...carDot} />
       </Source>
+      <Source id="standard-route" type="geojson" data={standardData}>
+        <Layer {...shown(standardLine, comparing)} beforeId={TOP} />
+      </Source>
+      <Source id="avoided" type="geojson" data={avoidedData}>
+        <Layer {...shown(avoidedGlow, comparing)} beforeId={TOP} />
+        <Layer {...shown(avoidedLine, comparing)} beforeId={TOP} />
+      </Source>
       {area && (
         <Source id="area" type="geojson" data={area}>
-          <Layer {...areaFill} beforeId={TOP} />
-          <Layer {...areaLine} beforeId={TOP} />
+          <Layer {...areaFill} beforeId={COMPARE} />
+          <Layer {...areaLine} beforeId={COMPARE} />
         </Source>
       )}
       {/* The scenic-score streets are mounted first and everything else sits below them ("under"), whichever dataset loads first,
           so the ~2,600 crash dots and the photo lines can't cover the green-to-gray streets. */}
       {segments && (
         <Source id="segments" type="geojson" data={segments}>
-          <Layer {...shown(segmentsLine, layerVis.streets)} beforeId={TOP} />
+          <Layer {...shown(segmentsLine, layerVis.streets)} beforeId={COMPARE} />
         </Source>
       )}
       {hazards && (
@@ -343,7 +464,8 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
           </Source>
           {hazards.ksi && (
             <Source id="ksi" type="geojson" data={hazards.ksi}>
-              <Layer {...shown(ksiDots, layerVis.ksi)} beforeId={under} />
+              {/* dimmed while a tour is on the map, so the route and what it avoided stand out */}
+              <Layer {...shown(tour ? ksiDim : ksiDots, layerVis.ksi)} beforeId={under} />
             </Source>
           )}
         </>
@@ -388,7 +510,7 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
         <Popup longitude={start[0]} latitude={start[1]} anchor="bottom" offset={22} onClose={() => setSelectedId(null)} closeButton={false} maxWidth="280px">
           <div className="space-y-1.5 text-slate-100">
             {/* eslint-disable-next-line @next/next/no-img-element -- served by our own API */}
-            <img src={media(tour.origin.photo)!} alt="" className="w-full rounded-lg" />
+            {tour.origin.photo && <img src={media(tour.origin.photo)!} alt="" className="w-full rounded-lg" />}
             <div className="text-[15px] font-bold"><span className="mr-1.5 text-green-300">Start ·</span>{tour.origin.street || "Unnamed block"}</div>
           </div>
         </Popup>

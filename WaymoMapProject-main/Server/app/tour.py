@@ -21,17 +21,27 @@ SPUR_M = 60
 # that makes the whole loop shortest (no more driving a block backwards to its sampled start and then forwards again).
 # Planning still uses the matrix's fixed direction, so no matrix rebuild is needed. False = always the sampled direction.
 TWO_WAY_BLOCKS = True
-ROUTER_VERSION = 7  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request
+ROUTER_VERSION = 8  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request (8: hin_driven + compare)
+
+
+# Where a tour's scenic scores come from. "photo": Street View frames rated by AI (the original pipeline, data/).
+# "popular": places people map and look up online, every street in the service area, no photos needed (pipeline.popular,
+# data/popular/). Both have the same file shapes, so everything below works on either.
+SOURCES = ("photo", "popular")
+
+
+def _src(name, source):
+    return name if source == "photo" else f"{source}/{name}"
 
 
 @lru_cache
-def segments():
-    return {s["id"]: s for s in _load("segments.json")}
+def segments(source="photo"):
+    return {s["id"]: s for s in _load(_src("segments.json", source))}
 
 
 @lru_cache
-def matrix(mood):
-    return _load(f"matrix_{mood}.json")
+def matrix(mood, source="photo"):
+    return _load(_src(f"matrix_{mood}.json", source))
 
 
 @lru_cache
@@ -53,6 +63,33 @@ def _frames_on(a, b):
             yield {"lat": s["lat"], "lng": s["lng"], "url": f"/static/frames/{s['id']}.jpg", "segment": s["id"]}
 
 
+def _why_popular(s):
+    """One line for a popular-source stop: the places near it, the best-known first, with its Wikipedia readership."""
+    named = [p for p in s.get("pois", []) if p.get("name")]
+    if not named:
+        what = {"historic": "a historic site", "greenery": "a park", "waterfront": "the waterfront", "food": "places to eat", "mural": "street art"}
+        return "Near " + (" and ".join(what.get(t, t.replace("_", " ")) for t in s["tags"]) or "popular places")
+    first = named[0]["name"] + (f" ({named[0]['views']:,} Wikipedia readers a month)" if named[0].get("views") else "")
+    return "Near " + ", ".join([first] + [p["name"] for p in named[1:]])
+
+
+def _hin_driven(G, edges):
+    """The High Injury Network pieces a drive uses (each once, either direction), as GeoJSON for the Safer Route map."""
+    feats, seen = [], set()
+    for a, b in edges:
+        s, key = safety.edge(a, b), ",".join(sorted((str(a), str(b))))
+        if not s.get("hin") or key in seen:
+            continue
+        seen.add(key)
+        d = graph.best_edge(G, a, b)
+        name = d.get("name") or ""
+        line = list(d["geometry"].coords) if "geometry" in d else [(G.nodes[a]["x"], G.nodes[a]["y"]), (G.nodes[b]["x"], G.nodes[b]["y"])]
+        feats.append({"type": "Feature", "geometry": {"type": "LineString", "coordinates": [list(c) for c in line]},
+                      "properties": {"key": key, "street": name[0] if isinstance(name, list) else name, "km": round(d["length"] / 1000, 3),
+                                     "ksi": s.get("ksi", 0), "ped": s.get("ped", 0)}})
+    return {"type": "FeatureCollection", "features": feats}
+
+
 # Ranked alternatives: a request for the same (mood, minutes, start, safe) can ask for rank 0..TOP_N-1. Each rank is a loop built
 # around its own "anchor": the mood's top blocks are ranked by priority (scenic score, and how quick the round trip to reach them
 # is: W_TIME is the share given to speed), kept APART_M apart, and rank r is the loop that must pass through anchor r while
@@ -62,28 +99,45 @@ W_TIME = 0.4      # share of an anchor's priority that is "quick to reach"; the 
 APART_M = 500     # anchors are at least this far apart, and rank r avoids everything this close to the anchors ranked above it
 
 
-def tour_id(mood, minutes, start, safe=False, at=None, to=None, rank=0):
-    return (f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "")
+def tour_id(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="photo"):
+    return (f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "") + (f"-{source}" if source != "photo" else "")
             + (f"-from{at[0]:.4f}_{at[1]:.4f}" if at else "") + (f"-to{to[0]:.4f}_{to[1]:.4f}" if to else "")
             + (f"-r{rank}" if rank else ""))
 
 
 @lru_cache
 def _frame_points():
-    """Street pieces whose Street View frame is on disk: the only places a tour may start or end."""
-    return [p for p in _load("points.json") if config.has_frame(p["id"])]
+    """Street pieces whose Street View frame is on disk and whose street is in the loaded graph: the only places a tour may
+    start or end. (Blocks scored on a bigger AREA_BUFFER_MILES graph than this machine's graph.graphml are skipped, not a 500.)"""
+    G = graph.get()
+    return [p for p in _load("points.json") if config.has_frame(p["id"]) and p["u"] in G]
 
 
-def snap(lat, lng, max_m=250):
-    """The photo-backed street piece nearest (lat, lng), or ValueError if none is within max_m."""
-    p = min(_frame_points(), key=lambda p: router.haversine_m((lat, lng), (p["lat"], p["lng"])))
+@lru_cache
+def _node_points():
+    G = graph.get()
+    return [(n, d["y"], d["x"]) for n, d in G.nodes(data=True)]
+
+
+def snap_node(lat, lng, max_m=250):
+    """The street-graph node nearest (lat, lng) as a start point, for the popular source (any street can be a start there)."""
+    n, y, x = min(_node_points(), key=lambda p: (p[1] - lat) ** 2 + ((p[2] - lng) * 0.9) ** 2)  # cos(25.8°) ≈ 0.9
+    if router.haversine_m((lat, lng), (y, x)) > max_m:
+        raise ValueError("no street near that spot; pick a spot on a street")
+    name = next((d.get("name") for *_, d in graph.get().out_edges(n, data=True) if d.get("name")), "")
+    return {"id": f"node{n}", "u": n, "lat": y, "lng": x, "street": name[0] if isinstance(name, list) else name}
+
+
+def snap(lat, lng, max_m=250, pts=None):
+    """The photo-backed street piece (or the piece from `pts`) nearest (lat, lng), or ValueError if none is within max_m."""
+    p = min(pts or _frame_points(), key=lambda p: router.haversine_m((lat, lng), (p["lat"], p["lng"])))
     if router.haversine_m((lat, lng), (p["lat"], p["lng"])) > max_m:
         raise ValueError("no photo-covered street near that spot; pick a spot closer to a photographed street")
     return p
 
 
-def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
-    """Same (mood, minutes, start, safe, at, to, rank) returns the stored tour instead of rebuilding.
+def build(mood, minutes, start, safe=False, at=None, to=None, rank=0, source="photo"):
+    """Same (mood, minutes, start, safe, at, to, rank, source) returns the stored tour instead of rebuilding.
 
     Two modes, told apart by whether the rider picked a destination (`to`):
     * Loop (default): the scenic blocks for this mood within reach of the start, inserted into a loop by best score per
@@ -94,16 +148,17 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
     nearest photographed street. safe=True draws the road on the road-safety weights (see app/safety.py) and, in a
     loop, discounts stops on High Injury Network corridors; every tour gets a safety score plus the comparisons.
     """
-    tid = tour_id(mood, minutes, start, safe, at, to, rank)
+    tid = tour_id(mood, minutes, start, safe, at, to, rank, source)
     existing = store.get(tid)
     if existing and existing.get("router") == ROUTER_VERSION and bool(existing.get("dest_id")) == bool(to):  # same routing version and mode; anything older (or a loop cached as a one-way) is rebuilt
         return existing
-    M, segs, G = matrix(mood), segments(), graph.get()
+    M, segs, G = matrix(mood, source), segments(source), graph.get()
     wx, live = safety.weather(), safety.closures()
     safety.apply(G, alert=wx["flood"], closures=live)
     weight = "safe_time" if safe else "travel_time"
     nodes = dict(M["nodes"])
-    o = snap(*(at or config.HOODS[start]["start"]))
+    photo_src = source == "photo"
+    o = (snap if photo_src else snap_node)(*(at or config.HOODS[start]["start"]))  # popular: any street can be the start
     K0 = "start"
     nodes[K0] = {"enter": o["u"], "exit": o["u"], "traverse": 0}
     minutes_of = lambda es: sum(graph.best_edge(G, a, b)["travel_time"] for a, b in es) / 60  # real minutes on the drawn road
@@ -115,7 +170,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
         if (w, a, b) not in hops:
             try:
                 hops[(w, a, b)] = nx.bidirectional_dijkstra(G, a, b, weight=w)
-            except nx.NetworkXNoPath:
+            except (nx.NetworkXNoPath, nx.NodeNotFound):  # NodeNotFound: data built on a bigger graph than this one
                 hops[(w, a, b)] = (router.INF, None)
         return hops[(w, a, b)]
 
@@ -181,7 +236,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
     if to:
         # One-way (the rider picked a destination on the map): exactly the road from the start to it. Nothing before
         # the start, nothing after the destination, no detours; a shortest path never revisits a spot, so no cycles.
-        e = snap(*to)
+        e = snap(*to) if photo_src else snap(*to, pts=list(segs.values()))
         if e["id"] not in segs:
             raise ValueError("that end point is on a street with no scenic score; pick another")
         if e["u"] == o["u"]:
@@ -200,7 +255,8 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
         # the budget (15 min -> 1.5 km, 30 min -> 2.2 km) so a tour never crosses the city for one more stop.
         END = None
         radius_m = 800 + 45 * minutes
-        cands = [k for k in M["nodes"] if k in segs and k != o["id"] and config.has_frame(k)  # not the block the tour starts on
+        cands = [k for k in M["nodes"] if k in segs and k != o["id"] and (config.has_frame(k) or not photo_src)  # not the block the tour starts on
+                 and M["nodes"][k]["enter"] in G and M["nodes"][k]["exit"] in G  # a matrix built on a bigger graph than this one
                  and router.haversine_m((o["lat"], o["lng"]), (segs[k]["lat"], segs[k]["lng"])) <= radius_m]
         # Block-to-block minutes are precomputed (pipeline.matrix); start-to-block and block-to-start are computed here,
         # out from the start and back to it on the reversed graph, so a start picked on the map works too.
@@ -275,7 +331,8 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
 
     if to:
         want = config.mood_tags(mood)  # the numbered stops are the best blocks the road passes; None = any
-        onpath = [k for k in dict.fromkeys(f["segment"] for f in frames) if k in segs and k not in (o["id"], END)]
+        onpath = [k for k in dict.fromkeys(f["segment"] for f in frames) if k in segs and k not in (o["id"], END)] if photo_src else \
+            [k for k in dict.fromkeys(f"p{x}_{y}" for a, b in edges for x, y in ((a, b), (b, a))) if k in segs and k != END and segs[k]["score"] >= MIN_STOP_SCORE]
         ids = [k for k in onpath if want is None or set(want) & set(segs[k]["tags"])] or onpath
         ids.append(END)
     else:
@@ -292,24 +349,47 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
         }
         if s.get("place"):
             stop["place"] = s["place"]  # from pipeline.check; narrate_tour skips a second Places call
+        if not photo_src:  # popular: the places that earned the score, and a Street View frame of the same street if one exists
+            on = (f"{s['u']}_{s['v']}_", f"{s['v']}_{s['u']}_")  # photo pieces are named <u>_<v>_<i>
+            stop["frame_idx"] = next((i for i, f in enumerate(frames) if f["segment"].startswith(on)), None)
+            stop["photo"] = frames[stop["frame_idx"]]["url"] if stop["frame_idx"] is not None else None
+            stop["pois"], stop["why"] = s.get("pois", []), _why_popular(s)
         stops.append(stop)
     sc = safety.score(G, edges, alert=wx["flood"], closures=live)
+    hin_driven = _hin_driven(G, edges)
+    compare = None
     if sc and safe:
         fast = safety.score(G, fastest, alert=wx["flood"], closures=live)
         fast_min = sum(graph.best_edge(G, a, b)["travel_time"] for a, b in fastest) / 60
         sc["vs_fastest"] = {"minutes": round(total - fast_min, 1), "hin_km": round(sc["hin_km"] - fast["hin_km"], 2),
                             "score": sc["score"] - fast["score"], "arterial_pct": sc["arterial_pct"] - fast["arterial_pct"]}
-        base = build(mood, minutes, start, safe=False, at=at, to=to, rank=rank)  # the same request with Safer Route off (cached after the first time)
-        if bs := base["summary"].get("safety"):
+        try:
+            base = build(mood, minutes, start, safe=False, at=at, to=to, rank=rank, source=source)  # the same request with Safer Route off (cached after the first time)
+        except ValueError:  # e.g. Safer Route off has fewer ranked loops than this rank: no comparison, but the safe tour stands
+            base = None
+        if base and (bs := base["summary"].get("safety")):
             sc["vs_default"] = {"minutes": round(total - base["summary"]["drive_minutes"], 1), "hin_km": round(sc["hin_km"] - bs["hin_km"], 2),
                                 "score": sc["score"] - bs["score"], "calm_pct": sc["calm_pct"] - bs["calm_pct"], "stops": len(stops) - base["summary"]["stops"]}
+        if base:
+            mine = {f["properties"]["key"] for f in hin_driven["features"]}
+            avoided = [f for f in (base.get("hin_driven") or {"features": []})["features"] if f["properties"]["key"] not in mine]
+            compare = {  # for the map: the Safer-OFF tour (its own loop, so some stops may differ) drawn in gray under this one
+                "base_id": base["id"], "path": base["path"],
+                "avoided_hin": {"type": "FeatureCollection", "features": avoided},  # High Injury Network pieces it drives and this tour doesn't
+                "avoided_km": round(sum(f["properties"]["km"] for f in avoided), 2),  # distinct pieces; vs_default.hin_km is the per-trip net
+                "avoided_ksi": sum(f["properties"]["ksi"] for f in avoided),  # killed/seriously-injured crash sites on those pieces
+                "corridors": sorted({f["properties"]["street"] for f in avoided if f["properties"]["street"]}),
+            }
     tour = {
-        "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe, "router": ROUTER_VERSION,
+        "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe, "router": ROUTER_VERSION, "source": source,
         "rank": rank, "options": options,  # rank r of `options` ranked loops (1 option for a one-way to a picked destination)
-        "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"], "photo": f"/static/frames/{o['id']}.jpg"},
+        "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"],
+                   "photo": f"/static/frames/{o['id']}.jpg" if config.has_frame(o["id"]) else None},  # popular starts may have no photo
         "dest_id": END,  # one-way only: the destination stop, where the path ends; None for a loop (the UI keys off this)
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
         "frames": frames, "stops": stops,
+        "hin_driven": hin_driven,  # High Injury Network pieces this drive uses (GeoJSON), so a Safer tour can diff against it
+        "compare": compare,  # Safer Route on only: {base_id, path, avoided_hin, avoided_km, avoided_ksi, corridors}; None otherwise
         "summary": {"distance_km": round(dist / 1000, 1), "drive_minutes": round(total, 1), "stops": len(stops), "businesses": [],
                     "safety": sc, "weather": {"flood": wx["flood"], "storm": wx["storm"], "alerts": [a["event"] for a in wx["alerts"]]},
                     "spurs": quality},

@@ -44,8 +44,11 @@ IDENTIFY_MODEL = os.getenv("IDENTIFY_MODEL", "meta-muse-glimmer-30b")
 VERIFY_GAP = float(os.getenv("VERIFY_GAP", "2"))
 if LLM_KEY:
     os.environ["OPENAI_API_KEY"] = LLM_KEY
+# Gemini writes the per-stop narration scripts directly (google-genai) when no LiteLLM proxy is configured.
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
+ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "") or "21m00Tcm4TlvDq8ikWAM"  # premade "Rachel", the same default as the client's /api/narrate
 MONGO_URI = os.getenv("MONGO_URI", "")
 FL511_KEY = os.getenv("FL511_API_KEY", "")  # optional: live closures/incidents for the safety layer
 CORS_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
@@ -73,6 +76,12 @@ MATRIX_MOODS = [*MOODS, "murals+sunset"]  # every mood the router accepts has a 
 HOODS = {
     "wynwood": {"bbox": (-80.2100, 25.7950, -80.1900, 25.8100), "start": (25.8010, -80.1995)},
     "little_havana": {"bbox": (-80.2450, 25.7600, -80.2150, 25.7750), "start": (25.7657, -80.2290)},
+    # Starts for the "popular" source (pipeline.popular); the photo source only offers a start once 20+ of its blocks are scored.
+    "downtown": {"bbox": (-80.1990, 25.7700, -80.1840, 25.7880), "start": (25.7797, -80.1897)},  # Freedom Tower
+    "brickell": {"bbox": (-80.2050, 25.7560, -80.1880, 25.7720), "start": (25.7663, -80.1935)},  # Mary Brickell Village
+    "design_district": {"bbox": (-80.2000, 25.8060, -80.1850, 25.8180), "start": (25.8133, -80.1925)},
+    "coconut_grove": {"bbox": (-80.2560, 25.7200, -80.2300, 25.7360), "start": (25.7280, -80.2430)},  # CocoWalk
+    "coral_gables": {"bbox": (-80.2750, 25.7400, -80.2500, 25.7560), "start": (25.7493, -80.2586)},  # Miracle Mile
 }
 
 

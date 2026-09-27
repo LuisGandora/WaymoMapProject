@@ -98,6 +98,8 @@ def score(G, edges, alert=False, closures=None):
 # ---- live feeds ------------------------------------------------------------------------------------------------------
 
 _cache = {}
+FEED_RETRY_S = 60  # after a failed fetch, try again this soon instead of waiting out the whole cache TTL
+FEED_TIMEOUT = httpx.Timeout(4.0, connect=6.0)  # feeds run inside a new tour's build: a slow one must not stall Generate
 
 
 def _cached(key, ttl, fn):
@@ -107,7 +109,7 @@ def _cached(key, ttl, fn):
             _cache[key] = (now, fn())
         except Exception as e:  # never let a feed outage break routing
             print(f"safety feed {key} failed: {e}")
-            _cache[key] = (now, _cache.get(key, (0, None))[1])
+            _cache[key] = (now - ttl + FEED_RETRY_S, _cache.get(key, (0, None))[1])  # keep the last value, but retry soon
     return _cache[key][1]
 
 
@@ -115,7 +117,7 @@ def weather():
     """Active NWS alerts at the service area's centre: {alerts: [...], flood: bool, storm: bool}. Cached 10 min."""
     def fetch():
         c = graph.polygon().centroid
-        r = httpx.get("https://api.weather.gov/alerts/active", params={"point": f"{c.y:.4f},{c.x:.4f}"}, timeout=15,
+        r = httpx.get("https://api.weather.gov/alerts/active", params={"point": f"{c.y:.4f},{c.x:.4f}"}, timeout=FEED_TIMEOUT,
                       headers={"User-Agent": "WaymoMapProject (hackathon; contact via github)", "Accept": "application/geo+json"})
         r.raise_for_status()
         alerts = [{k: f["properties"].get(k) for k in ("event", "severity", "urgency", "headline", "onset", "expires")}
@@ -133,7 +135,7 @@ def closures():
         return []
 
     def fetch():
-        r = httpx.get("https://fl511.com/api/v2/get/event", params={"key": key, "format": "json"}, timeout=20)
+        r = httpx.get("https://fl511.com/api/v2/get/event", params={"key": key, "format": "json"}, timeout=FEED_TIMEOUT)
         r.raise_for_status()
         x0, y0, x1, y1 = graph.polygon().bounds
         out = []

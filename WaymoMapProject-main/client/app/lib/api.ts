@@ -14,7 +14,11 @@ export type Stop = {
   script: Record<string, string>;
   audio: Record<string, string>; // lang -> "/static/audio/<file>.mp3", relative to API
   place?: { name: string; rating: number; type: string } | null;
+  pois?: { name: string | null; kind: string; views: number }[]; // "popular" source: the places that earned the score (views = Wikipedia readers/month)
 };
+
+// Where a tour's scenic scores come from: Street View frames rated by AI, or places people map and look up online.
+export type Source = "photo" | "popular";
 
 // Which overlay layers the map draws (the legend toggles them): the scenic-score streets, injury corridors, flood zones, crash dots.
 export type LayerVis = { streets: boolean; hin: boolean; flood: boolean; ksi: boolean };
@@ -34,7 +38,10 @@ export type Tour = {
   safe?: boolean;
   rank?: number; // 0 = best-ranked route; skip asks for rank + 1
   options?: number; // how many ranked routes exist for these settings (1 when the user picked a destination)
-  origin?: { id: string; lat: number; lng: number; street: string; photo: string }; // the photographed street the tour starts on
+  source?: Source;
+  origin?: { id: string; lat: number; lng: number; street: string; photo: string | null }; // the street the tour starts on (no photo for some "popular" starts)
+  // Safer Route on: the same request with it off, for the map (gray route + the High Injury pieces it drives and this tour avoids).
+  compare?: { base_id: string; path: { type: "LineString"; coordinates: [number, number][] }; avoided_hin: GeoJSON.FeatureCollection; avoided_km: number; avoided_ksi: number; corridors: string[] } | null;
   dest_id?: string | null; // set for a one-way tour: that stop is the destination
   summary: {
     distance_km: number; drive_minutes: number; stops: number; businesses: string[];
@@ -43,7 +50,7 @@ export type Tour = {
   };
 };
 
-export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean; start_lat?: number; start_lng?: number; end_lat?: number; end_lng?: number; rank?: number };
+export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean; start_lat?: number; start_lng?: number; end_lat?: number; end_lng?: number; rank?: number; source?: Source };
 
 export type Safety = {
   score: number; grade: "A" | "B" | "C" | "D"; km: number; hin_km: number; hin_pct: number; arterial_pct: number; calm_pct: number;
@@ -57,9 +64,12 @@ async function j<T>(r: Response): Promise<T> {
   return r.json();
 }
 
-export const getConfig = () => fetch(`${API}/config`).then(j<{ moods: string[]; languages: Record<string, string>; starts: string[] }>);
+export type SourceOffer = { moods: string[]; starts: string[]; by_start: Record<string, string[]> }; // by_start: the moods that work from each start
+export const getConfig = () =>
+  fetch(`${API}/config`).then(j<{ moods: string[]; languages: Record<string, string>; starts: string[]; sources?: Partial<Record<Source, SourceOffer>> }>);
+export const getHealth = () => fetch(`${API}/health`).then(j<{ ok: boolean; narration: boolean; mongo: boolean }>); // narration: the backend has LLM + ElevenLabs keys
 export const getServiceArea = () => fetch(`${API}/service-area`).then(j<GeoJSON.Feature>);
-export const getSegments = () => fetch(`${API}/segments`).then(j<GeoJSON.FeatureCollection>);
+export const getSegments = (source: Source = "photo") => fetch(`${API}/segments?source=${source}`).then(j<GeoJSON.FeatureCollection>);
 export const getPhotos = () => fetch(`${API}/photos`).then(j<GeoJSON.FeatureCollection>);
 export const getTour = (id: string) => fetch(`${API}/tour/${id}`).then(j<Tour>);
 export const getHazards = () => fetch(`${API}/hazards`).then(j<{ hin: GeoJSON.FeatureCollection; flood: GeoJSON.FeatureCollection; ksi?: GeoJSON.FeatureCollection }>);
@@ -77,6 +87,11 @@ export const narrateSpot = (tourId: string, stopId: string, lang: string) =>
   fetch(`${API}/tour/${tourId}/stop/${stopId}/narrate?lang=${lang}`, { method: "POST" }).then(j<{ stop: string; audio: string; script: string }>);
 
 export const media = (path: string | null | undefined) => (path ? `${API}${path}` : null);
+
+// The Safer Route comparison, only when there is something to show: a Safer tour that drives less high-injury road than
+// the same request with Safer Route off. The map layers, the camera and the card all use this one test.
+export const saferCompare = (tour: Tour | null) =>
+  tour?.safe && tour.compare && (tour.summary.safety?.vs_default?.hin_km ?? 0) < 0 ? tour.compare : null;
 
 // Narration points. The route drives past every scenic block it can fit, but a 30-minute tour with 30 numbered stops
 // is one per minute, so only the best few get a marker: about one per 4 minutes, at least 4, kept in route order.

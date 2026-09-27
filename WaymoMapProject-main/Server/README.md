@@ -62,9 +62,10 @@ service_area.geojson --> graph.py (OSM, no highways) --> graph.graphml
 | Endpoint | What it does |
 |---|---|
 | `GET /health` | `{ok, narration, mongo}`: whether narration keys / Mongo are configured |
-| `GET /config` | moods, languages, start neighborhoods (feed the pickers) |
+| `GET /config` | moods, languages, start neighborhoods (feed the pickers); `sources.{photo,popular}` has each scenery source's `starts`, `moods` and `by_start` (the moods that build a tour from each start) |
 | `GET /service-area` | the traced polygon as a GeoJSON Feature (outline layer) |
-| `GET /segments?bbox=minLng,minLat,maxLng,maxLat` | scored ~100 m street pieces as GeoJSON (`score`, `tags`, `street`) for the green-to-gray map; `bbox` optional |
+| `GET /segments?bbox=minLng,minLat,maxLng,maxLat&source=photo` | scored ~100 m street pieces as GeoJSON (`score`, `tags`, `street`) for the green-to-gray map; `bbox` optional; `source=popular` gives the popular-online scores (plus `places`) |
+| (any `POST /route` body) `source` | `"photo"` (default): Street View frames rated by AI. `"popular"`: places people map and look up online, every street in the service area, from `python -m pipeline.popular` (data/popular/). A Safer tour also carries `compare`: the Safer-OFF route's `path`, the High Injury pieces it drives and this one avoids (`avoided_hin`, `avoided_km`, `avoided_ksi`, `corridors`) |
 | `GET /photos` | every street piece with a downloaded Street View frame as GeoJSON (`photo`, `street`, `date`, pano `lat/lng`). Needs only `sample` + `streetview`, not `score`; the map uses it for click-a-street-to-see-it |
 | `POST /route` `{mood, minutes, start, language, lat?, lng?}` | builds (or returns the cached) one-way tour from `start`, or from `lat`/`lng` if given (400 if outside the service area, 422 if no photo-covered street is within 250 m); starts narration in `language` in the background. Returns `{tour_id, options}`: `options` is the top 10 routes, ranked by mean stop score (half-point steps) first, then share of the drive inside the service area, then drive time; `tour_id` is #1 and each option's `id` loads with `GET /tour/{id}` (which also has `origin`: the start's photo, street and description). Only #1 is narrated automatically |
 | `GET /tour/{id}` | full tour: `path` (GeoJSON LineString, lng/lat), `frames[]` for ride mode, `stops[]` (with `frame_idx`, `script{lang}`, `audio{lang}`), `summary`. Poll it while audio generates |
@@ -104,6 +105,7 @@ Interactive docs at `/docs`.
 | `verify.py` | `frames.json`, JPGs | `data/frames.json` | Glimmer identify → Google stars → `review_score` (/10, or -1), `verify_status`. Does not change AI `score`. `check.py` is the same with default `--min-score 7`. |
 | `rollup.py` | `points.json`, `frames.json` | `data/segments.json` | Averages frame scores per segment, keeps the segment geometry. |
 | `matrix.py` | `segments.json`, graph | `data/matrix_<mood>.json` | Per mood: top-30 candidates + the demo starts, Dijkstra drive minutes between all pairs. The router looks times up here instead of running Dijkstra per request. |
+| `popular.py` | graph, OpenStreetMap places (Overpass), Wikipedia page views | `data/popular/segments.json`, `pois.json`, `matrix_<mood>.json` | The no-photos scenery source: scores every street 1-10 from the attractions, museums, murals, monuments, parks, marinas and restaurants within 60 m, Wikipedia-read places weighted up. Free, no keys, ~2 min. Rerun after the graph changes. |
 | `bake.py` | all of the above + keys | `data/tours/<id>.json`, `data/media/audio/*.mp3` | Builds a tour and narrates it in every language for the stage demo. |
 
 `test_router.py`: self-check for the insertion algorithm, mood filtering, and that the demo starts are inside the polygon. Run `python test_router.py`.

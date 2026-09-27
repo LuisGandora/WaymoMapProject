@@ -35,12 +35,18 @@ def wiki_near(lat, lng):
 
 
 def script(stop, lang):
-    """~20 s spoken script in `lang`, grounded only in the facts we hand the LLM."""
-    from . import llm
-
-    facts = {"street": stop["street"], "tags": stop["tags"], "place": stop.get("place"), "wikipedia": stop.get("wiki")}
+    """~20 s spoken script in `lang`, grounded only in the facts we hand the model: Gemini directly, or the LiteLLM proxy."""
+    facts = {"street": stop["street"], "tags": stop["tags"], "place": stop.get("place"), "wikipedia": stop.get("wiki"),
+             "nearby places": [{"name": p["name"], "kind": p["kind"]} for p in stop.get("pois") or [] if p.get("name")]}  # popular source
     prompt = (f"Write a spoken tour-guide script of about 50 words in {config.LANGS[lang]} for a passenger in a robotaxi "
               f"passing this spot in Miami. Use ONLY these facts, invent nothing: {facts}. Output only the script.")
+    if config.GEMINI_KEY and not config.LLM_BASE:
+        from google import genai
+
+        r = genai.Client(api_key=config.GEMINI_KEY).models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
+        return r.text.strip()
+    from . import llm
+
     return llm.complete([{"role": "user", "content": prompt}])
 
 

@@ -1,5 +1,6 @@
 """FastAPI app. Run from Server/: uvicorn app.main:app --reload"""
 import json
+import threading
 from functools import lru_cache
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -8,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from shapely.geometry import Point, mapping
 
-from . import config, graph, safety, store, tour
+from . import config, graph, router, safety, store, tour
 
 config.MEDIA.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Waymo Tour API")
@@ -24,10 +25,13 @@ def warm_up():
         print(f"warm: graph {G.number_of_nodes()} nodes, safety data {'on' if safety.data()['edges'] else 'OFF (run pipeline.safety)'}")
     except Exception as e:  # missing data files are reported by the endpoints themselves
         print(f"warm-up skipped: {e}")
+    for fn in (safety.weather, store._coll):  # the NWS fetch and Mongo's DNS lookup happen now, in the background, not on the first click
+        threading.Thread(target=fn, daemon=True).start()
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_origin_regex=config.CORS_ORIGIN_REGEX, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.MEDIA), name="static")
 
-CAN_NARRATE = bool(config.LLM_KEY and config.ELEVEN_KEY and config.ELEVEN_VOICE)
+# A script writer (Gemini, or a LiteLLM proxy) plus ElevenLabs. Gemini alone is enough to write: see narrate.script.
+CAN_NARRATE = bool(((config.LLM_KEY and config.LLM_BASE) or config.GEMINI_KEY) and config.ELEVEN_KEY and config.ELEVEN_VOICE)
 
 
 class RouteReq(BaseModel):
@@ -41,6 +45,7 @@ class RouteReq(BaseModel):
     end_lat: float | None = None  # a destination picked on the map: makes it a one-way tour ending there
     end_lng: float | None = None
     rank: int = 0  # 0 = the best-ranked route; skipping a suggestion asks for rank+1 (ignored when a destination is picked)
+    source: str = "photo"  # "photo" = Street View frames rated by AI; "popular" = places people map and look up online (tour.SOURCES)
 
 
 def _need_data(fn, *a):
@@ -59,42 +64,64 @@ MIN_CANDIDATES = 5      # a mood needs this many scored blocks before the UI off
 MIN_HOOD_SEGMENTS = 20  # a start neighborhood needs this many scored blocks inside its bbox
 
 
-def available_moods():
-    """Moods whose matrix has enough real candidates. Wynwood has no waterfront or art deco, so until another
-    neighborhood is scored those moods are hidden rather than producing a tour of nothing."""
+def available_moods(source="photo", start=None):
+    """Moods that can actually make a tour: MIN_CANDIDATES blocks worth stopping at (tour.MIN_STOP_SCORE), on streets in
+    the loaded graph, within a 30-minute loop's reach of an offered start (or of `start` only). Anything else is hidden
+    rather than giving a 422 or a one-stop tour (e.g. the art deco blocks are on Miami Beach, far from the Wynwood start)."""
+    segs, G = tour.segments(source), graph.get()
+    starts = [config.HOODS[h]["start"] for h in ([start] if start else available_starts(source))]
+    reach_m = 800 + 45 * 10  # tour.build's loop radius at the UI's shortest budget (10 min), so every offered budget works
     out = []
     for m in config.MATRIX_MOODS:
         try:
-            nodes = tour.matrix(m)["nodes"]
+            nodes = tour.matrix(m, source)["nodes"]
         except FileNotFoundError:
             continue
-        if sum(not k.startswith("start:") for k in nodes) >= MIN_CANDIDATES:
+        ok = [k for k, n in nodes.items() if k in segs and segs[k]["score"] >= tour.MIN_STOP_SCORE and n["enter"] in G and n["exit"] in G
+              and any(router.haversine_m(p, (segs[k]["lat"], segs[k]["lng"])) <= reach_m for p in starts)]
+        if len(ok) >= MIN_CANDIDATES:
             out.append(m)
     return out
 
 
-def available_starts():
+def available_starts(source="photo"):
     """Start neighborhoods that actually have scored blocks (config.HOODS lists demo boxes, not what's been scored)."""
-    segs = tour.segments().values()
+    segs = tour.segments(source).values()
+
+    def snaps(at):  # the start point itself must reach a street the tour can begin on (a photographed one for "photo")
+        try:
+            return bool((tour.snap if source == "photo" else tour.snap_node)(*at))
+        except ValueError:
+            return False
     out = []
     for h, c in config.HOODS.items():
         w, s, e, n = c["bbox"]
-        if sum(w <= x["lng"] <= e and s <= x["lat"] <= n for x in segs) >= MIN_HOOD_SEGMENTS:
+        if sum(w <= x["lng"] <= e and s <= x["lat"] <= n for x in segs) >= MIN_HOOD_SEGMENTS and snaps(c["start"]):
             out.append(h)
     return out
 
 
 @app.get("/config")
 def options():
-    return {"moods": _need_data(available_moods), "languages": config.LANGS, "starts": _need_data(available_starts)}
+    def offer(source):
+        try:
+            starts = available_starts(source)
+            return {"moods": available_moods(source), "starts": starts,
+                    "by_start": {h: available_moods(source, h) for h in starts}}  # the moods that work from each start
+        except FileNotFoundError:  # that source's pipeline hasn't been run: offer nothing for it
+            return {"moods": [], "starts": [], "by_start": {}}
+    # moods/starts at the top level are the photo source's (what the UI has always read); sources has both
+    return {"moods": _need_data(available_moods), "languages": config.LANGS, "starts": _need_data(available_starts),
+            "sources": {s: offer(s) for s in tour.SOURCES}}
 
 
 @lru_cache
-def _segments_geojson():
-    segs = json.loads((config.DATA / "segments.json").read_text(encoding="utf-8"))
+def _segments_geojson(source="photo"):
+    segs = json.loads((config.DATA / tour._src("segments.json", source)).read_text(encoding="utf-8"))
     return {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": {"type": "LineString", "coordinates": s["line"]},
-         "properties": {"id": s["id"], "score": s["score"], "tags": s["tags"], "street": s["street"]}} for s in segs]}
+         "properties": {"id": s["id"], "score": s["score"], "tags": s["tags"], "street": s["street"],
+                        **({"places": ", ".join(p["name"] for p in s["pois"] if p.get("name"))} if "pois" in s else {})}} for s in segs]}
 
 
 @lru_cache
@@ -128,9 +155,11 @@ def service_area():
 
 
 @app.get("/segments")
-def segments(bbox: str | None = None):
+def segments(bbox: str | None = None, source: str = "photo"):
     """Scored ~100 m street pieces as GeoJSON, for the green-to-gray heat map. bbox=minLng,minLat,maxLng,maxLat."""
-    fc = _need_data(_segments_geojson)
+    if source not in tour.SOURCES:
+        raise HTTPException(400, f"source must be one of {', '.join(tour.SOURCES)}")
+    fc = _need_data(_segments_geojson, source)
     if not bbox:
         return fc
     try:
@@ -143,7 +172,9 @@ def segments(bbox: str | None = None):
 
 @app.post("/route")
 def route(req: RouteReq):
-    if req.mood not in _need_data(available_moods) or req.start not in _need_data(available_starts) or req.language not in config.LANGS:
+    if req.source not in tour.SOURCES:
+        raise HTTPException(400, f"source must be one of {', '.join(tour.SOURCES)}")
+    if req.mood not in _need_data(available_moods, req.source) or req.start not in _need_data(available_starts, req.source) or req.language not in config.LANGS:
         raise HTTPException(400, "that mood or start has no scored blocks yet; GET /config lists what's available")
     if not 0 <= req.rank < tour.TOP_N:
         raise HTTPException(400, f"rank must be 0-{tour.TOP_N - 1}")
@@ -158,7 +189,7 @@ def route(req: RouteReq):
         if pt and not graph.polygon().contains(Point(pt[1], pt[0])):
             raise HTTPException(400, f"the {name} point is outside the Waymo service area")
     try:
-        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe, at, to, req.rank)
+        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe, at, to, req.rank, req.source)
     except ValueError as e:
         raise HTTPException(422, str(e))
     if not t["stops"]:

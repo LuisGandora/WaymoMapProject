@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { createTour, getConfig, type LatLng, type Tour } from "../lib/api";
+import { createTour, getConfig, getHealth, type LatLng, type Source, type SourceOffer, type Tour } from "../lib/api";
 import MapPanel from "./MapPanel";
 import NarrationPlayer, { useNarration } from "./NarrationPlayer";
 
@@ -25,7 +25,28 @@ export const LANGUAGES = [
 export const STARTS = [
   { id: "wynwood", label: "Wynwood" },
   { id: "little_havana", label: "Little Havana" },
+  { id: "downtown", label: "Downtown" },
+  { id: "brickell", label: "Brickell" },
+  { id: "design_district", label: "Design District" },
+  { id: "coconut_grove", label: "Coconut Grove" },
+  { id: "coral_gables", label: "Coral Gables" },
 ] as const;
+
+// Which intro story (lib/narration.ts) fits each start; Wynwood picks by mood as before.
+const INTRO_BY_START: Partial<Record<string, string>> = {
+  design_district: "wynwood", // street art next door
+  little_havana: "food", // Calle Ocho, ventanitas, Versailles
+  downtown: "landmarks", // Freedom Tower
+  brickell: "museums", // the bayfront museums
+  coconut_grove: "landmarks", // Vizcaya
+  coral_gables: "landmarks", // the Biltmore
+};
+
+// Where the scenic scores come from (Server/app/tour.py SOURCES).
+export const SOURCES: readonly { id: Source; label: string; hint: string }[] = [
+  { id: "photo", label: "Street View AI", hint: "Blocks rated by AI from their Street View photos. Wynwood." },
+  { id: "popular", label: "Popular online", hint: "Streets ranked by the places people map and read about online. All of Miami's service area." },
+];
 
 export const MIN_MINUTES = 1;
 export const MAX_MINUTES = 30;
@@ -38,6 +59,7 @@ export type TourSettings = {
   start: (typeof STARTS)[number]["id"];
   minutes: number; // MIN_MINUTES..MAX_MINUTES
   safe: boolean;
+  source: Source;
 };
 
 const icon = "h-5 w-5 fill-none stroke-current stroke-2 [stroke-linecap:round] [stroke-linejoin:round]";
@@ -102,7 +124,7 @@ function PickRow({ kind, picking, set, onToggle, onClear }: { kind: "start" | "e
 }
 
 export default function Dashboard() {
-  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 15, safe: true });
+  const [settings, setSettings] = useState<TourSettings>({ mood: "murals+sunset", language: "es", start: "wynwood", minutes: 15, safe: true, source: "photo" });
   const [tour, setTour] = useState<Tour | null>(null);
   const [startPt, setStartPt] = useState<LatLng | null>(null); // start / destination picked on the map (inside the service area)
   const [endPt, setEndPt] = useState<LatLng | null>(null);
@@ -113,22 +135,27 @@ export default function Dashboard() {
 
   // Only offer moods / starts the backend has real scored blocks for (GET /config). The lists above are the labels;
   // Wynwood alone has no waterfront or art deco, so those stay hidden until another neighborhood is scored.
-  const [avail, setAvail] = useState<{ moods: string[]; starts: string[] } | null>(null);
+  // Each scenery source offers its own starts, and the moods that work from each start (by_start).
+  const [offers, setOffers] = useState<Partial<Record<Source, SourceOffer>> | null>(null);
+  // Per-stop voices need the backend's narration keys; without them the step bar would show an error at every stop.
+  const [spotReady, setSpotReady] = useState(false);
   useEffect(() => {
     getConfig()
-      .then((c) => {
-        setAvail({ moods: c.moods, starts: c.starts });
-        // If the current pick isn't offered, move to the first one that is.
-        setSettings((s) => ({
-          ...s,
-          mood: c.moods.includes(s.mood) ? s.mood : (MOODS.find((m) => c.moods.includes(m.id))?.id ?? s.mood),
-          start: c.starts.includes(s.start) ? s.start : (STARTS.find((h) => c.starts.includes(h.id))?.id ?? s.start),
-        }));
-      })
+      .then((c) => setOffers(c.sources ?? { photo: { moods: c.moods, starts: c.starts, by_start: {} } }))
       .catch((e) => console.warn("config:", e));
+    getHealth()
+      .then((h) => setSpotReady(h.narration))
+      .catch(() => setSpotReady(false));
   }, []);
-  const moods = avail ? MOODS.filter((m) => avail.moods.includes(m.id)) : MOODS;
-  const starts = avail ? STARTS.filter((h) => avail.starts.includes(h.id)) : STARTS;
+  const offer = offers?.[settings.source];
+  const starts = offer ? STARTS.filter((h) => offer.starts.includes(h.id)) : STARTS;
+  // What the tour is built with: the rider's picks, or the first offered start / mood when a pick isn't offered for this
+  // source and start (e.g. no murals from Coral Gables). Worked out here rather than written back into settings.
+  const start = starts.some((h) => h.id === settings.start) ? settings.start : (starts[0]?.id ?? settings.start);
+  const moodIds = offer ? (offer.by_start[start] ?? offer.moods) : null;
+  const moods = moodIds ? MOODS.filter((m) => moodIds.includes(m.id)) : MOODS;
+  const mood = moods.some((m) => m.id === settings.mood) ? settings.mood : (moods[0]?.id ?? settings.mood);
+  const picks = { ...settings, start, mood };
 
   // ElevenLabs intro narration (app/api/narrate). Started before any await so the click still counts for autoplay.
   const narration = useNarration();
@@ -144,14 +171,15 @@ export default function Dashboard() {
   // rank 0 = the best-ranked route; Skip asks for the next one of the SAME tour (its own mood/minutes/start/safe, even if the
   // sliders moved since) and doesn't replay the intro narration.
   async function generate(rank = 0) {
-    if (rank === 0 && voice) narration.start(settings.mood, settings.language);
-    const of = rank > 0 && tour ? { mood: tour.mood, minutes: tour.minutes, start: tour.start, safe: !!tour.safe } : {};
+    // The intro story matches where the tour starts (a map-picked start keeps the mood's story; the map only flies to its places near the route).
+    if (rank === 0 && voice) narration.start((!startPt && INTRO_BY_START[picks.start]) || picks.mood, settings.language);
+    const of = rank > 0 && tour ? { mood: tour.mood, minutes: tour.minutes, start: tour.start, safe: !!tour.safe, source: tour.source ?? "photo" } : {};
     setLoading(true);
     setError(null);
     try {
       setTour(
         await createTour({
-          ...settings,
+          ...picks,
           ...of,
           rank,
           ...(startPt && { start_lat: startPt.lat, start_lng: startPt.lng }),
@@ -160,6 +188,7 @@ export default function Dashboard() {
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      narration.stop(); // no tour was built: don't keep narrating (and flying the camera over) an empty map
     } finally {
       setLoading(false);
     }
@@ -190,6 +219,35 @@ export default function Dashboard() {
             <Label
               glyph={
                 <svg viewBox="0 0 24 24" className={icon}>
+                  <path d="m12 3 2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" />
+                </svg>
+              }
+            >
+              Scenic Picks From
+            </Label>
+            <div className="flex items-center gap-2" role="radiogroup" aria-label="Where the scenic scores come from">
+              {SOURCES.filter((o) => !offers || offers[o.id]?.starts.length).map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.source === o.id}
+                  onClick={() => set("source", o.id)}
+                  className={`flex-1 rounded-xl border py-2 text-center text-[15px] font-bold transition ${
+                    settings.source === o.id ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-300" : "border-slate-700/70 bg-[#060b18] text-slate-300 hover:border-slate-500"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[13px] text-slate-400">{SOURCES.find((o) => o.id === settings.source)?.hint}</p>
+          </section>
+
+          <section>
+            <Label
+              glyph={
+                <svg viewBox="0 0 24 24" className={icon}>
                   <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" />
                   <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
                   <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
@@ -200,7 +258,7 @@ export default function Dashboard() {
             >
               Tour Mood
             </Label>
-            <Select value={settings.mood} options={moods} onChange={(v) => set("mood", v)} />
+            <Select value={mood} options={moods} onChange={(v) => set("mood", v)} />
           </section>
 
           <section>
@@ -228,7 +286,7 @@ export default function Dashboard() {
             >
               Start From
             </Label>
-            <Select value={settings.start} options={starts} onChange={(v) => { set("start", v); setStartPt(null); }} />
+            <Select value={start} options={starts} onChange={(v) => { set("start", v); setStartPt(null); }} />
             <PickRow
               kind="start"
               picking={picking}
@@ -287,31 +345,6 @@ export default function Dashboard() {
                 </button>
               ))}
             </div>
-          </section>
-
-          <section>
-            <Label
-              glyph={
-                <svg viewBox="0 0 24 24" className={icon}>
-                  <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" />
-                  <path d="m9 12 2 2 4-4" />
-                </svg>
-              }
-            >
-              Safer Route
-            </Label>
-            <button
-              type="button"
-              onClick={() => set("safe", !settings.safe)}
-              className={`flex h-[62px] w-full items-center justify-between rounded-2xl border px-5 text-left transition ${
-                settings.safe ? "border-emerald-400/70 bg-emerald-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
-              }`}
-            >
-              <span className="text-[14px] leading-tight text-slate-300">Avoid high-injury corridors, big arterials, live closures, flood zones in storms</span>
-              <span className={`ml-4 rounded-full px-3 py-1 text-[13px] font-bold ${settings.safe ? "bg-emerald-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
-                {settings.safe ? "ON" : "OFF"}
-              </span>
-            </button>
           </section>
 
           <section>
@@ -378,6 +411,28 @@ export default function Dashboard() {
               </button>
             </div>
           )}
+          {/* Safer Route sits here, always in view next to Generate: it's the feature the whole route is built around. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={settings.safe}
+            onClick={() => set("safe", !settings.safe)}
+            className={`mb-4 flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+              settings.safe ? "border-emerald-400/70 bg-emerald-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
+            }`}
+          >
+            <svg viewBox="0 0 24 24" className={`${icon} shrink-0 ${settings.safe ? "text-emerald-300" : "text-slate-400"}`}>
+              <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-bold text-slate-100">Safer Route</span>
+              <span className="block text-[12px] leading-tight text-slate-400">Avoids Miami-Dade&apos;s high-injury corridors and big arterials, and flood zones during flood alerts</span>
+            </span>
+            <span className={`shrink-0 rounded-full px-3 py-1 text-[13px] font-bold ${settings.safe ? "bg-emerald-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
+              {settings.safe ? "ON" : "OFF"}
+            </span>
+          </button>
           <button
             onClick={() => generate()}
             disabled={loading}
@@ -400,7 +455,7 @@ export default function Dashboard() {
           story={narration.story}
           cinematic={narration.status === "playing"}
           language={settings.language}
-          spotVoice={voice}
+          spotVoice={voice && spotReady}
           onSpotPlay={narration.stop}
           picking={picking}
           startPt={startPt}
