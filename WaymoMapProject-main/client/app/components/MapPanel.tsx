@@ -2,7 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { highlights, leg, media, narrateSpot, navStops, type LatLng, type Tour } from "../lib/api";
+import { highlights, leg, media, narrateSpot, navStops, type LayerVis, type LatLng, type Tour } from "../lib/api";
+import Legend from "./Legend";
 import type { Story } from "./NarrationPlayer";
 
 const TourMap = dynamic(() => import("./TourMap"), {
@@ -14,35 +15,6 @@ const TourMap = dynamic(() => import("./TourMap"), {
     </div>
   ),
 });
-
-// What each color and shape on the map means. Colors match the layers in TourMap.tsx.
-function Legend() {
-  const row = "flex items-center gap-2.5";
-  const dot = (bg: string, size = 10, ring = false) => (
-    <span className="inline-block shrink-0 rounded-full" style={{ width: size, height: size, background: bg, boxShadow: ring ? `0 0 0 3px ${bg}66, 0 0 10px ${bg}` : undefined }} />
-  );
-  return (
-    <details open className="pointer-events-auto absolute bottom-24 left-4 z-10 w-[230px] rounded-2xl border border-slate-700/70 bg-[#0e1628]/92 text-[12px] text-slate-300 shadow-lg backdrop-blur">
-      <summary className="cursor-pointer select-none px-4 py-2.5 text-[13px] font-bold text-slate-100">Legend</summary>
-      <div className="space-y-1.5 px-4 pb-3">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Your tour</div>
-        <div className={row}><span className="inline-block h-1 w-5 shrink-0 rounded bg-cyan-400" />Route, arrows show direction</div>
-        <div className={row}>{dot("#22c55e", 12, true)}START</div>
-        <div className={row}>{dot("#ef4444", 12, true)}END (destination)</div>
-        <div className={row}><span className="grid h-[14px] w-[14px] shrink-0 place-items-center rounded-full bg-cyan-400 text-[8px] font-extrabold text-[#0e1628]">1</span>Highlighted stop</div>
-        <div className="pt-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Scenic score</div>
-        <div className={row}><span className="inline-block h-1.5 w-5 shrink-0 rounded" style={{ background: "linear-gradient(90deg,#475569,#eab308,#22c55e)" }} />Low to high (streets)</div>
-        <div className="pt-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">Road safety</div>
-        <div className={row}><span className="inline-block h-0 w-5 shrink-0 border-t-[3px] border-dashed border-red-500" />High-injury corridor</div>
-        <div className={row}>{dot("#f97316")}Serious-injury crash</div>
-        <div className={row}>{dot("#dc2626")}Fatal crash</div>
-        <div className={row}>{dot("#f97316", 14)}Larger dot: pedestrian involved</div>
-        <div className={row}><span className="inline-block h-3 w-5 shrink-0 rounded-sm bg-blue-500/40" />Flood zone</div>
-        <div className="pt-1 text-[11px] text-slate-500">Crash dots: killed or seriously injured, FDOT Signal Four. Click one for details.</div>
-      </div>
-    </details>
-  );
-}
 
 // Right-hand panel: the map plus a status pill (idle / building / error / tour summary).
 export default function MapPanel({
@@ -78,6 +50,7 @@ export default function MapPanel({
   const step = at.id === tour?.id ? at.n : null;
   const setStep = (n: number | null) => setAt({ id: tour?.id, n });
   const nav = tour ? navStops(tour) : [];
+  const [layerVis, setLayerVis] = useState<LayerVis>({ streets: true, hin: true, flood: true, ksi: true }); // road-safety layers the legend switches on and off
   const stopId = step ? nav[step - 1]?.id : undefined; // step 0 is the start pin, which has no spot to narrate
 
   // Reaching a numbered stop (or the destination) asks the backend for that spot's own script and audio, then plays it.
@@ -132,8 +105,8 @@ export default function MapPanel({
     : null;
   return (
     <div className="relative h-full w-full">
-      <Legend />
-      <TourMap tour={tour} story={story} cinematic={cinematic} picking={!!picking} startPt={startPt} endPt={endPt} onPick={onPick} step={step} onStep={setStep} />
+      <Legend vis={layerVis} onToggle={(k) => setLayerVis((v) => ({ ...v, [k]: !v[k] }))} hidden={cinematic} />
+      <TourMap layerVis={layerVis} tour={tour} story={story} cinematic={cinematic} picking={!!picking} startPt={startPt} endPt={endPt} onPick={onPick} step={step} onStep={setStep} />
 
       {/* Cinema mode while the narration plays: letterbox bars + vignette slide in, and retract after. */}
       <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden" aria-hidden>

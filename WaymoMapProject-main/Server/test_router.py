@@ -24,9 +24,12 @@ poly = graph.polygon()
 for h, c in config.HOODS.items():
     assert poly.contains(Point(c["start"][1], c["start"][0])), f"{h} start is outside the service polygon"
 
-# 4) the default tour is a loop (the merged-in router): back at the start, no destination, no ranked options
+# 4) the default tour is a loop, and skipping walks through ranked loops: each one different, all within budget, best first
 from app import tour
-t = tour.build("murals+sunset", 30, "wynwood")
-assert t["dest_id"] is None and t["options"] == 1 and t["stops"] and t["summary"]["drive_minutes"] <= 30 * 1.1 + 0.1, t["summary"]
-assert t["path"]["coordinates"][0] == t["path"]["coordinates"][-1], "a loop ends where it starts"
+ts = [tour.build("murals+sunset", 30, "wynwood", rank=r) for r in range(3)]
+for t in ts:
+    assert t["dest_id"] is None and t["stops"] and t["summary"]["drive_minutes"] <= 30 * 1.1 + 0.1, t["summary"]
+    assert t["path"]["coordinates"][0] == t["path"]["coordinates"][-1], "a loop ends where it starts"
+assert ts[0]["options"] > 1 and len({frozenset(s["id"] for s in t["stops"]) for t in ts}) == 3, "ranked loops must differ"
+assert sum(s["score"] for s in ts[0]["stops"]) >= sum(s["score"] for s in ts[2]["stops"]), "rank 0 is the most scenic"
 print("ok")

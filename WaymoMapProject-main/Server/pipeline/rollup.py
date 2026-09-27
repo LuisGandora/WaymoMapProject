@@ -20,10 +20,9 @@ def main():
         seg = {**{k: p[k] for k in ("id", "u", "v", "i", "lat", "lng", "street", "line")},
                "score": round(sum(f["score"] for f in fs) / len(fs), 1),
                "tags": sorted({t for f in fs for t in f["tags"]} - {"nothing"})}
-        if best.get("place"):
-            seg["place"] = best["place"]
-        if best.get("check"):
-            seg["check"] = best["check"]
+        for key in ("place", "check", "verify_status", "review_score", "rating_ref", "subject"):
+            if best.get(key) is not None:
+                seg[key] = best[key]
         segs.append(seg)
     (config.DATA / "segments.json").write_text(json.dumps(segs), encoding="utf-8")
     print(f"{len(segs)} segments -> data/segments.json")

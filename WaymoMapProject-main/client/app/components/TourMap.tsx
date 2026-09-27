@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Map, { Layer, Marker, NavigationControl, Popup, ScaleControl, Source, type LayerProps, type MapEvent, type MapLayerMouseEvent, type MapRef } from "react-map-gl/maplibre";
 import type { ExpressionSpecification, GeoJSONSource, Map as MLMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getHazards, getPhotos, getSegments, getServiceArea, media, navStops, type LatLng, type Stop, type Tour } from "../lib/api";
+import { getHazards, getPhotos, getSegments, getServiceArea, media, navStops, type LayerVis, type LatLng, type Stop, type Tour } from "../lib/api";
 import type { Story } from "./NarrationPlayer";
 
 export const MIAMI = { latitude: 25.7617, longitude: -80.1918 };
@@ -172,7 +172,10 @@ function Pin({ color, label, glow }: { color: string; label: string; glow?: bool
 const GREEN = "#22c55e";
 const RED = "#ef4444";
 
-export default function TourMap({ tour, story, cinematic, picking, startPt, endPt, onPick, step, onStep }: { tour: Tour | null; story: Story; cinematic: boolean; picking: boolean; startPt: LatLng | null; endPt: LatLng | null; onPick: (p: LatLng) => void; step: number | null; onStep: (n: number | null) => void }) {
+// A hidden layer stays mounted but is neither drawn nor clickable.
+const shown = (l: LayerProps, on: boolean) => ({ ...l, layout: { ...("layout" in l ? l.layout : {}), visibility: on ? "visible" : "none" } }) as LayerProps;
+
+export default function TourMap({ tour, story, cinematic, picking, startPt, endPt, onPick, step, onStep, layerVis = { streets: true, hin: true, flood: true, ksi: true } }: { layerVis?: LayerVis; tour: Tour | null; story: Story; cinematic: boolean; picking: boolean; startPt: LatLng | null; endPt: LatLng | null; onPick: (p: LatLng) => void; step: number | null; onStep: (n: number | null) => void }) {
   const mapRef = useRef<MapRef>(null);
   const [area, setArea] = useState<GeoJSON.Feature | null>(null);
   const [hazards, setHazards] = useState<{ hin: GeoJSON.FeatureCollection; flood: GeoJSON.FeatureCollection; ksi?: GeoJSON.FeatureCollection } | null>(null);
@@ -192,6 +195,7 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
   const dest = stops.find((s) => s.id === tour?.dest_id) ?? null;
   const start = tour?.path.coordinates[0];
   const end = dest ? tour?.path.coordinates.at(-1) : undefined; // where the drawn path stops; the destination block's own midpoint is a little past it
+  const under = segments ? "segments" : TOP; // where the hazard and photo layers go: just below the scenic-score streets
   const routeData = useMemo<GeoJSON.Feature | GeoJSON.FeatureCollection>(() => (tour ? { type: "Feature", properties: {}, geometry: tour.path } : EMPTY), [tour]);
 
   // Static layers, fetched once. Either failing just leaves that layer off; the map still renders.
@@ -322,30 +326,32 @@ export default function TourMap({ tour, story, cinematic, picking, startPt, endP
           <Layer {...areaLine} beforeId={TOP} />
         </Source>
       )}
+      {/* The scenic-score streets are mounted first and everything else sits below them ("under"), whichever dataset loads first,
+          so the ~2,600 crash dots and the photo lines can't cover the green-to-gray streets. */}
+      {segments && (
+        <Source id="segments" type="geojson" data={segments}>
+          <Layer {...shown(segmentsLine, layerVis.streets)} beforeId={TOP} />
+        </Source>
+      )}
       {hazards && (
         <>
           <Source id="flood" type="geojson" data={hazards.flood}>
-            <Layer {...floodFill} beforeId={TOP} />
+            <Layer {...shown(floodFill, layerVis.flood)} beforeId={under} />
           </Source>
           <Source id="hin" type="geojson" data={hazards.hin}>
-            <Layer {...hinLine} beforeId={TOP} />
+            <Layer {...shown(hinLine, layerVis.hin)} beforeId={under} />
           </Source>
           {hazards.ksi && (
             <Source id="ksi" type="geojson" data={hazards.ksi}>
-              <Layer {...ksiDots} beforeId={TOP} />
+              <Layer {...shown(ksiDots, layerVis.ksi)} beforeId={under} />
             </Source>
           )}
         </>
       )}
       {photos && (
         <Source id="photos" type="geojson" data={photos}>
-          <Layer {...photosLine} beforeId={TOP} />
-          <Layer {...photosHit} beforeId={TOP} />
-        </Source>
-      )}
-      {segments && (
-        <Source id="segments" type="geojson" data={segments}>
-          <Layer {...segmentsLine} beforeId={TOP} />
+          <Layer {...photosLine} beforeId={under} />
+          <Layer {...photosHit} beforeId={under} />
         </Source>
       )}
       {!tour && startPt && (

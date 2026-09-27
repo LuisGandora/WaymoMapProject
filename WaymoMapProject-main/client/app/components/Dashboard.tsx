@@ -134,15 +134,25 @@ export default function Dashboard() {
   const narration = useNarration();
   const [voice, setVoice] = useState(true);
 
-  // rank 0 = the best-ranked route; Skip asks for the next one (no new intro narration, the mood is the same).
+  // Leave the current route: back to the empty map (and stop any narration).
+  function exitRoute() {
+    narration.stop();
+    setTour(null);
+    setError(null);
+  }
+
+  // rank 0 = the best-ranked route; Skip asks for the next one of the SAME tour (its own mood/minutes/start/safe, even if the
+  // sliders moved since) and doesn't replay the intro narration.
   async function generate(rank = 0) {
     if (rank === 0 && voice) narration.start(settings.mood, settings.language);
+    const of = rank > 0 && tour ? { mood: tour.mood, minutes: tour.minutes, start: tour.start, safe: !!tour.safe } : {};
     setLoading(true);
     setError(null);
     try {
       setTour(
         await createTour({
           ...settings,
+          ...of,
           rank,
           ...(startPt && { start_lat: startPt.lat, start_lng: startPt.lng }),
           ...(endPt && { end_lat: endPt.lat, end_lng: endPt.lng }),
@@ -334,18 +344,37 @@ export default function Dashboard() {
         </div>
 
         <footer className="border-t border-slate-800/70 px-8 py-8">
-          {tour && (tour.options ?? 1) > 1 && (
-            <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 py-3">
-              <span className="text-[14px] text-slate-300">
-                Route <b className="text-cyan-300">{(tour.rank ?? 0) + 1}</b> of {tour.options}
-                <span className="block text-[12px] text-slate-500">best scenery for the shortest drive first</span>
-              </span>
+          {tour && (
+            <div className="mb-4 rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[14px] text-slate-300">
+                  {(tour.options ?? 1) > 1 ? (
+                    <>
+                      Route <b className="text-cyan-300">{(tour.rank ?? 0) + 1}</b> of {tour.options}
+                      <span className="block text-[12px] text-slate-500">best scenery for the quickest trip first</span>
+                    </>
+                  ) : (
+                    <>
+                      Your route
+                      <span className="block text-[12px] text-slate-500">{tour.dest_id ? "one-way to your destination" : "the only route for these settings"}</span>
+                    </>
+                  )}
+                </span>
+                {(tour.options ?? 1) > 1 && (
+                  <button
+                    onClick={() => generate(((tour.rank ?? 0) + 1) % tour.options!)}
+                    disabled={loading}
+                    className="h-10 shrink-0 rounded-xl border border-cyan-400/60 bg-cyan-500/10 px-4 text-[14px] font-bold text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-50"
+                  >
+                    Skip →
+                  </button>
+                )}
+              </div>
               <button
-                onClick={() => generate(((tour.rank ?? 0) + 1) % tour.options!)}
-                disabled={loading}
-                className="h-10 rounded-xl border border-cyan-400/60 bg-cyan-500/10 px-4 text-[14px] font-bold text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-50"
+                onClick={exitRoute}
+                className="mt-3 h-9 w-full rounded-xl border border-slate-700/70 text-[13px] text-slate-300 transition hover:border-red-400/60 hover:text-red-300"
               >
-                Skip →
+                ✕ Exit route
               </button>
             </div>
           )}

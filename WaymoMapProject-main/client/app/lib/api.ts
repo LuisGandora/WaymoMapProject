@@ -16,6 +16,9 @@ export type Stop = {
   place?: { name: string; rating: number; type: string } | null;
 };
 
+// Which overlay layers the map draws (the legend toggles them): the scenic-score streets, injury corridors, flood zones, crash dots.
+export type LayerVis = { streets: boolean; hin: boolean; flood: boolean; ksi: boolean };
+
 export type LatLng = { lat: number; lng: number };
 
 export type Frame = { lat: number; lng: number; url: string; segment: string };

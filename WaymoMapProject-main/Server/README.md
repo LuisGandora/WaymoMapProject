@@ -82,6 +82,10 @@ Interactive docs at `/docs`.
 |---|---|
 | `app/config.py` | All env vars, paths, and the constants everyone shares: `MOODS` (mood to tags), `HOODS` (demo neighborhood bbox + loop start), `LANGS`, `TAGS`, `SPEED_FACTOR`. Change moods/neighborhoods here. |
 | `app/llm.py` | LiteLLM OpenAI-compatible client for gpt-oss-120b. Ranking and tour scripts both go through here. |
+| `app/identify.py` | Muse Glimmer (LiteLLM vision) → `subject` for Places lookup. |
+| `app/places_rating.py` | Google Places text/nearby search → star rating + review count. |
+| `app/verify_logic.py` | Stars×2 → /10; compare to AI score → `verify_status`. |
+| `app/verify_frame.py` | One-frame orchestration (identify → resolve → compare). |
 | `app/graph.py` | Loads the drivable street graph. Uses `data/graph.graphml` if present, else pulls OSM inside the polygon and saves it. Highways are excluded by an *inclusion* filter of road classes (primary down to residential), so motorway/trunk/service roads are never in the graph. Applies `SPEED_FACTOR` to travel times. |
 | `app/router.py` | Pure route logic, no I/O. `top_candidates` picks the best-scored segments for a mood (>= 250 m apart); `build_loop` does cheapest insertion by `score / added_minutes` until the time budget is used. Tested by `test_router.py`. |
 | `app/tour.py` | Builds a one-way tour from `segments.json` + the graph: the start (a neighborhood default, or a spot the user picked) snaps to the nearest photo-backed street piece; the destination is the user's pick or a scenic block for the mood reached within the time budget. The route is the single shortest road start -> destination (no detours, no cycles, nothing before the start or after the end); the numbered stops are the best blocks on it, and the drive is checked against the budget. Real path geometry via Dijkstra, ride-mode frames, stops. `narrate_tour` fills script + audio per stop. Tour id = `<mood>-<minutes>-<start>` plus `-safe`, `-from<lat>_<lng>`, `-to<lat>_<lng>` when set; a stored tour without a destination (older loop format) is rebuilt. |
@@ -97,6 +101,7 @@ Interactive docs at `/docs`.
 | `validate.py` | graph, `points.json` | (exit code) | Import checklist: polygon valid and ~50-70 sq mi, no motorway/trunk, strongly connected, travel times > 0, points inside polygon, median segment ~100 m. Run after `sample`. |
 | `streetview.py` | `points.json` | `data/media/frames/<id>.jpg` | Free metadata check first, so no-imagery spots cost nothing. Skips frames already downloaded. |
 | `score.py` | `points.json`, frames | `data/frames.json` | gpt-oss-120b, JSON `{score 1-10, tags[]}`. Resumable, saves every 25. `--fake` invents scores (no keys). |
+| `verify.py` | `frames.json`, JPGs | `data/frames.json` | Glimmer identify → Google stars → `review_score` (/10, or -1), `verify_status`. Does not change AI `score`. `check.py` is the same with default `--min-score 7`. |
 | `rollup.py` | `points.json`, `frames.json` | `data/segments.json` | Averages frame scores per segment, keeps the segment geometry. |
 | `matrix.py` | `segments.json`, graph | `data/matrix_<mood>.json` | Per mood: top-30 candidates + the demo starts, Dijkstra drive minutes between all pairs. The router looks times up here instead of running Dijkstra per request. |
 | `bake.py` | all of the above + keys | `data/tours/<id>.json`, `data/media/audio/*.mp3` | Builds a tour and narrates it in every language for the stage demo. |
@@ -216,7 +221,7 @@ Service area traced from Waymo's published service map: approximate, not officia
 
 - The neighborhood boxes (`HOODS`) are rough. Wynwood, Little Havana, Overtown and the Design District are inside the traced polygon; **Little Haiti is not** (the polygon's north edge is ~NW 46th St), so don't pitch it as a stop.
 - ElevenLabs `eleven_multilingual_v2` may not support Haitian Creole. Test `ht` early and pick another voice/model or drop the language if the audio is wrong.
-- Ranking and scripts use `openai/gpt-oss-120b` via LiteLLM (`completion()`, OpenAI-shaped). Override with `LLM_MODEL` / `LLM_BASE_URL` in `.env`.
+- Ranking, Glimmer vision, and scripts use LiteLLM with `LLM_API_KEY` + **`LLM_BASE_URL`** (your team’s LiteLLM proxy at `https://<host>/v1` or `http://127.0.0.1:4000/v1` locally). `sk-…` keys are proxy virtual keys only. Glimmer uses the same `app/llm.py` path as gpt-oss-120b with a different `IDENTIFY_MODEL`. Run `python -m pipeline.llm_check` after setting the base URL to list models on the proxy.
 - Google's Maps Platform terms restrict caching/storing Street View imagery and Places data. Keep it to the demo neighborhoods and don't publish the dataset.
 - Route times come from OSM speeds times `SPEED_FACTOR`; calibrate `SPEED_FACTOR` against a real ride time.
 - Sunset is approximated as waterfront + greenery tags (no sun position yet).

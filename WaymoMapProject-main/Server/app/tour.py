@@ -21,7 +21,7 @@ SPUR_M = 60
 # that makes the whole loop shortest (no more driving a block backwards to its sampled start and then forwards again).
 # Planning still uses the matrix's fixed direction, so no matrix rebuild is needed. False = always the sampled direction.
 TWO_WAY_BLOCKS = True
-ROUTER_VERSION = 4  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request
+ROUTER_VERSION = 7  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request
 
 
 @lru_cache
@@ -53,11 +53,13 @@ def _frames_on(a, b):
             yield {"lat": s["lat"], "lng": s["lng"], "url": f"/static/frames/{s['id']}.jpg", "segment": s["id"]}
 
 
-# ponytail: the ranked one-way destinations these three knobs drove were replaced by the loop router (default) in the merge with
-# origin/main; they are kept because /route still validates `rank` against TOP_N. Tours report options=1, so the UI shows no Skip.
-TOP_N = 10        # routes offered per request, best first; the user skips through them
-W_TIME = 0.4      # share of a route's priority that is "quick to reach"; the rest is its scenic score
-APART_M = 500     # offered destinations are at least this far apart, so #2 isn't just the next block of #1
+# Ranked alternatives: a request for the same (mood, minutes, start, safe) can ask for rank 0..TOP_N-1. Each rank is a loop built
+# around its own "anchor": the mood's top blocks are ranked by priority (scenic score, and how quick the round trip to reach them
+# is: W_TIME is the share given to speed), kept APART_M apart, and rank r is the loop that must pass through anchor r while
+# avoiding the areas of the higher-ranked anchors, so the offered loops really differ.
+TOP_N = 10        # loops offered per request, best first; the rider skips through them
+W_TIME = 0.4      # share of an anchor's priority that is "quick to reach"; the rest is its scenic score
+APART_M = 500     # anchors are at least this far apart, and rank r avoids everything this close to the anchors ranked above it
 
 
 def tour_id(mood, minutes, start, safe=False, at=None, to=None, rank=0):
@@ -175,6 +177,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
             m += graph.best_edge(G, a, b)["length"]
         return m
 
+    options = 1  # a loop sets this to how many ranked loops exist; a one-way to a picked destination is the only option
     if to:
         # One-way (the rider picked a destination on the map): exactly the road from the start to it. Nothing before
         # the start, nothing after the destination, no detours; a shortest path never revisits a spot, so no cycles.
@@ -217,7 +220,25 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
         # safe mode: a stop on a High Injury Network corridor keeps 60% of its score (safety.W["stop_on_hin"])
         stop_score = {k: segs[k]["score"] * (safety.stop_factor(segs[k]) if safe else 1.0) for k in cands}
         cands = [k for k in cands if segs[k]["score"] >= MIN_STOP_SCORE]  # worth stopping for, or not a stop at all (raw score: the safe-mode discount only re-ranks)
-        spurs = lambda: [(spur_m(legs[i - 1], legs[i]), route[i]) for i in range(1, len(route) - 1)]  # (metres retraced, stop)
+        spurs = lambda: [(spur_m(legs[i - 1], legs[i]), route[i]) for i in range(1, len(route) - 1) if route[i] != anchor]  # the anchor is never dropped as a spur  # (metres retraced, stop)
+        # Ranked alternatives: anchors by priority, then rank r = the loop through anchor r that avoids the higher anchors' areas.
+        pt = lambda k: (segs[k]["lat"], segs[k]["lng"])
+        roundtrip = {k: t(K0, k) + t(k, K0) for k in cands}
+        prio = lambda k: (1 - W_TIME) * segs[k]["score"] / 10 + W_TIME * (1 - roundtrip[k] / minutes)  # both terms ~0..1
+        anchors = []
+        for k in sorted((k for k in cands if roundtrip[k] <= 0.9 * minutes), key=prio, reverse=True):  # the anchor itself must fit the budget
+            if all(router.haversine_m(pt(k), pt(a)) >= APART_M for a in anchors):
+                anchors.append(k)
+                if len(anchors) == TOP_N:
+                    break
+        options = len(anchors)
+        if not options:
+            raise ValueError("no scored stops for this mood fit that time budget near the start; try more minutes or another mood")
+        if rank >= options:
+            raise ValueError(f"there are only {options} routes for these settings")
+        anchor = anchors[rank]
+        cands = [k for k in cands if all(router.haversine_m(pt(k), pt(a)) >= APART_M for a in anchors[:rank])]
+        stop_score[anchor] = 1e6  # planning only: the loop is built around its anchor, whatever the discount or the other blocks' value
         dropped, spurs_before, last = set(), None, None
         while True:
             route, _ = router.build_loop(t, stop_score, K0, [k for k in cands if k not in dropped], minutes)
@@ -228,9 +249,9 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
                 break
             legs = legs_of(weight)
             while minutes_of(flat(legs)) > minutes * 1.1 and len(route) > 3:  # the safer road is longer; drop the weakest stop until it fits
-                route.remove(min(route[1:-1], key=lambda k: segs[k]["score"]))
+                route.remove(min((k for k in route[1:-1] if k != anchor), key=lambda k: segs[k]["score"], default=route[1]))
                 legs = legs_of(weight)
-            worst = max(spurs()) if len(route) > 3 else (0, None)  # a lone remaining stop is allowed to be an out-and-back
+            worst = max(spurs(), default=(0, None)) if len(route) > 3 else (0, None)  # a lone remaining stop is allowed to be an out-and-back
             if spurs_before is None:
                 spurs_before = sum(m > SPUR_M for m, _ in spurs())
             if worst[0] <= SPUR_M:
@@ -284,7 +305,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
                                 "score": sc["score"] - bs["score"], "calm_pct": sc["calm_pct"] - bs["calm_pct"], "stops": len(stops) - base["summary"]["stops"]}
     tour = {
         "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe, "router": ROUTER_VERSION,
-        "rank": rank, "options": 1,  # ranked one-way destinations gave way to loops; options=1 keeps the Skip button hidden
+        "rank": rank, "options": options,  # rank r of `options` ranked loops (1 option for a one-way to a picked destination)
         "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"], "photo": f"/static/frames/{o['id']}.jpg"},
         "dest_id": END,  # one-way only: the destination stop, where the path ends; None for a loop (the UI keys off this)
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
