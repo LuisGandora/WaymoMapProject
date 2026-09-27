@@ -11,7 +11,7 @@ def _load(name):
     return json.loads((config.DATA / name).read_text(encoding="utf-8"))
 
 
-# Loop quality knobs. A loop only stops at blocks scoring at least MIN_STOP_SCORE (after the safe-mode discount), so a
+# Loop quality knobs. A loop only stops at blocks whose raw score is at least MIN_STOP_SCORE, so a
 # long budget in a small neighborhood is not padded with 3/10 walls just to use the time. A stop whose leg out retraces
 # its leg in for more than SPUR_M metres is an out-and-back spur and is dropped (see build).
 MIN_STOP_SCORE = 4
@@ -20,7 +20,7 @@ SPUR_M = 60
 # that makes the whole loop shortest (no more driving a block backwards to its sampled start and then forwards again).
 # Planning still uses the matrix's fixed direction, so no matrix rebuild is needed. False = always the sampled direction.
 TWO_WAY_BLOCKS = True
-ROUTER_VERSION = 3  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request
+ROUTER_VERSION = 4  # bump when routing logic changes: a cached tour built by an older version is rebuilt on request
 
 
 @lru_cache
@@ -207,7 +207,7 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
 
         # safe mode: a stop on a High Injury Network corridor keeps 60% of its score (safety.W["stop_on_hin"])
         stop_score = {k: segs[k]["score"] * (safety.stop_factor(segs[k]) if safe else 1.0) for k in cands}
-        cands = [k for k in cands if stop_score[k] >= MIN_STOP_SCORE]  # worth stopping for, or not a stop at all
+        cands = [k for k in cands if segs[k]["score"] >= MIN_STOP_SCORE]  # worth stopping for, or not a stop at all (raw score: the safe-mode discount only re-ranks)
         spurs = lambda: [(spur_m(legs[i - 1], legs[i]), route[i]) for i in range(1, len(route) - 1)]  # (metres retraced, stop)
         dropped, spurs_before, last = set(), None, None
         while True:
