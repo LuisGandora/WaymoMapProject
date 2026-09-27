@@ -132,14 +132,16 @@ export default function Dashboard() {
   const narration = useNarration();
   const [voice, setVoice] = useState(true);
 
-  async function generate() {
-    if (voice) narration.start(settings.mood, settings.language);
+  // rank 0 = the best-ranked route; Skip asks for the next one (no new intro narration, the mood is the same).
+  async function generate(rank = 0) {
+    if (rank === 0 && voice) narration.start(settings.mood, settings.language);
     setLoading(true);
     setError(null);
     try {
       setTour(
         await createTour({
           ...settings,
+          rank,
           ...(startPt && { start_lat: startPt.lat, start_lng: startPt.lng }),
           ...(endPt && { end_lat: endPt.lat, end_lng: endPt.lng }),
         }),
@@ -318,7 +320,7 @@ export default function Dashboard() {
                 voice ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-700/70 bg-[#060b18] hover:border-slate-500"
               }`}
             >
-              <span className="text-[14px] leading-tight text-slate-300">A 20-second spoken intro to your tour, in the narration language</span>
+              <span className="text-[14px] leading-tight text-slate-300">A spoken intro, plus a voice for each spot you reach, in the narration language</span>
               <span className={`ml-4 rounded-full px-3 py-1 text-[13px] font-bold ${voice ? "bg-cyan-400 text-[#0e1628]" : "bg-slate-700 text-slate-200"}`}>
                 {voice ? "ON" : "OFF"}
               </span>
@@ -327,8 +329,23 @@ export default function Dashboard() {
         </div>
 
         <footer className="border-t border-slate-800/70 px-8 py-8">
+          {tour && (tour.options ?? 1) > 1 && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-slate-700/70 bg-[#060b18] px-5 py-3">
+              <span className="text-[14px] text-slate-300">
+                Route <b className="text-cyan-300">{(tour.rank ?? 0) + 1}</b> of {tour.options}
+                <span className="block text-[12px] text-slate-500">best scenery for the shortest drive first</span>
+              </span>
+              <button
+                onClick={() => generate(((tour.rank ?? 0) + 1) % tour.options!)}
+                disabled={loading}
+                className="h-10 rounded-xl border border-cyan-400/60 bg-cyan-500/10 px-4 text-[14px] font-bold text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-wait disabled:opacity-50"
+              >
+                Skip →
+              </button>
+            </div>
+          )}
           <button
-            onClick={generate}
+            onClick={() => generate()}
             disabled={loading}
             className={`${loading ? "shimmer" : ""} relative flex h-[72px] w-full items-center overflow-hidden justify-center gap-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-[21px] font-bold text-white shadow-[0_10px_30px_rgba(6,182,212,0.3)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80`}
           >
@@ -348,6 +365,9 @@ export default function Dashboard() {
           error={error}
           story={narration.story}
           cinematic={narration.status === "playing"}
+          language={settings.language}
+          spotVoice={voice}
+          onSpotPlay={narration.stop}
           picking={picking}
           startPt={startPt}
           endPt={endPt}

@@ -14,12 +14,21 @@ from . import config
 ROADS = '["highway"~"^(primary|secondary|tertiary|unclassified|residential|living_street|primary_link|secondary_link|tertiary_link)$"]'
 
 
-def polygon():
-    """Service area as one valid (Multi)Polygon, EPSG:4326. Hand-traced shapes often self-intersect."""
+MILE_M = 1609.344
+
+
+@lru_cache
+def polygon(buffered=True):
+    """Service area as one valid (Multi)Polygon, EPSG:4326, grown by AREA_BUFFER_MILES (buffered=False: the traced shape).
+    Hand-traced shapes often self-intersect."""
     gj = json.loads(config.AREA.read_text(encoding="utf-8"))
     feats = gj["features"] if gj["type"] == "FeatureCollection" else [gj]
     geom = unary_union([shape(f["geometry"]) for f in feats])  # disconnected traces -> MultiPolygon
-    return geom if geom.is_valid else make_valid(geom).buffer(0)
+    geom = geom if geom.is_valid else make_valid(geom).buffer(0)
+    if buffered and config.AREA_BUFFER_MILES:
+        gs = gpd.GeoSeries([geom], crs="EPSG:4326")  # buffer in meters (local UTM), not degrees
+        geom = gs.to_crs(gs.estimate_utm_crs()).buffer(config.AREA_BUFFER_MILES * MILE_M).to_crs("EPSG:4326").iloc[0]
+    return geom
 
 
 def area_sq_miles(geom):

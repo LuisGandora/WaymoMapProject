@@ -1,5 +1,6 @@
 """Build a tour (route + frames + stops) from the precomputed data, and fill in its narration."""
 import json
+import threading
 from functools import lru_cache
 
 import networkx as nx
@@ -40,9 +41,15 @@ def _frames_on(a, b):
             yield {"lat": s["lat"], "lng": s["lng"], "url": f"/static/frames/{s['id']}.jpg", "segment": s["id"]}
 
 
-def tour_id(mood, minutes, start, safe=False, at=None, to=None):
+TOP_N = 10        # routes offered per request, best first; the user skips through them
+W_TIME = 0.4      # share of a route's priority that is "quick to reach"; the rest is its scenic score
+APART_M = 500     # offered destinations are at least this far apart, so #2 isn't just the next block of #1
+
+
+def tour_id(mood, minutes, start, safe=False, at=None, to=None, rank=0):
     return (f"{mood.replace('+', '_')}-{minutes}-{start}" + ("-safe" if safe else "")
-            + (f"-from{at[0]:.4f}_{at[1]:.4f}" if at else "") + (f"-to{to[0]:.4f}_{to[1]:.4f}" if to else ""))
+            + (f"-from{at[0]:.4f}_{at[1]:.4f}" if at else "") + (f"-to{to[0]:.4f}_{to[1]:.4f}" if to else "")
+            + (f"-r{rank}" if rank else ""))
 
 
 @lru_cache
@@ -59,16 +66,17 @@ def snap(lat, lng, max_m=250):
     return p
 
 
-def build(mood, minutes, start, safe=False, at=None, to=None):
-    """Same (mood, minutes, start, safe, at, to) returns the stored tour instead of rebuilding.
+def build(mood, minutes, start, safe=False, at=None, to=None, rank=0):
+    """Same (mood, minutes, start, safe, at, to, rank) returns the stored tour instead of rebuilding.
 
     at=(lat, lng) starts from a spot the user picked instead of the neighborhood's default start; to=(lat, lng) is the
-    destination the user picked (otherwise the most scenic block within reach is chosen).
+    destination the user picked. Otherwise the top TOP_N destinations are ranked (scenic score vs. drive time, see
+    W_TIME) and `rank` picks one: 0 = best, 1 = the one after that, for a user who skips the first suggestion.
     Both snap to the nearest photographed street. With `to`, the path is exactly the road from the start to the
     destination (nothing before the start, nothing after the end, no detours); the time budget is a ceiling on it.
     """
-    tid = tour_id(mood, minutes, start, safe, at, to)
-    if (existing := store.get(tid)) and "summary" in existing and existing.get("dest_id"):  # older cached docs (loops): rebuild
+    tid = tour_id(mood, minutes, start, safe, at, to, rank)
+    if (existing := store.get(tid)) and "summary" in existing and existing.get("dest_id") and "options" in existing:  # older cached docs (loops): rebuild
         return existing
     M, segs, G = matrix(mood), segments(), graph.get()
     wx, live = safety.weather(), safety.closures()
@@ -95,23 +103,31 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
 
     # Every tour is one-way and simple: exactly the road from the start to the destination. Nothing before the
     # start, nothing after the destination, no detours, and a shortest path never revisits a spot, so no cycles.
+    options = 1
     if to:
         e = snap(*to)
         if e["id"] not in segs:
             raise ValueError("that end point is on a street with no scenic score; pick another")
     else:
         # No destination picked: a scenic block for this mood that the road reaches with time to spare.
-        fwd = nx.single_source_dijkstra_path_length(G, o["u"], weight="travel_time")
+        fwd = nx.single_source_dijkstra_path_length(G, o["u"], cutoff=0.85 * minutes * 60, weight="travel_time")  # only nearby blocks matter; keeps big graphs fast
         want = config.mood_tags(mood)  # None = any
-        reach = [k for k, g in segs.items() if k != o["id"] and config.has_frame(k) and (want is None or set(want) & set(g["tags"]))
-                 and fwd.get(g["u"], router.INF) / 60 <= 0.85 * minutes]
+        reach = [k for k, g in segs.items() if k != o["id"] and g["u"] != o["u"] and config.has_frame(k)
+                 and (want is None or set(want) & set(g["tags"])) and fwd.get(g["u"], router.INF) / 60 <= 0.85 * minutes]
         if not reach:
             raise ValueError("no scenic block for this mood is within reach of the start in that time; try more minutes or another mood")
-        # The budget sets how far: best-scored block 50-85% of it away; if the scored area is smaller than that,
-        # the best of the five farthest.
         mins = lambda k: fwd[segs[k]["u"]] / 60
-        pool = [k for k in reach if mins(k) >= 0.5 * minutes] or sorted(reach, key=mins)[-5:]
-        e = segs[max(pool, key=lambda k: (segs[k]["score"], mins(k)))]
+        prio = lambda k: (1 - W_TIME) * segs[k]["score"] / 10 + W_TIME * (1 - mins(k) / minutes)  # both terms ~0..1, higher is better
+        picks = []
+        for k in sorted(reach, key=prio, reverse=True):
+            if all(router.haversine_m((segs[k]["lat"], segs[k]["lng"]), (segs[p]["lat"], segs[p]["lng"])) >= APART_M for p in picks):
+                picks.append(k)
+                if len(picks) == TOP_N:
+                    break
+        if rank >= len(picks):
+            raise ValueError(f"that is all {len(picks)} routes for these settings; skip wraps back to the first")
+        options = len(picks)
+        e = segs[picks[rank]]
     if e["u"] == o["u"]:
         raise ValueError("the start and the destination are the same spot")
     END = e["id"]
@@ -154,12 +170,12 @@ def build(mood, minutes, start, safe=False, at=None, to=None):
         fast_min = sum(graph.best_edge(G, a, b)["travel_time"] for a, b in fastest) / 60
         sc["vs_fastest"] = {"minutes": round(total - fast_min, 1), "hin_km": round(sc["hin_km"] - fast["hin_km"], 2),
                             "score": sc["score"] - fast["score"], "arterial_pct": sc["arterial_pct"] - fast["arterial_pct"]}
-        base = build(mood, minutes, start, safe=False, at=at, to=to)  # the same request with Safer Route off (cached after the first time)
+        base = build(mood, minutes, start, safe=False, at=at, to=to, rank=rank)  # the same request with Safer Route off (cached after the first time)
         if bs := base["summary"].get("safety"):
             sc["vs_default"] = {"minutes": round(total - base["summary"]["drive_minutes"], 1), "hin_km": round(sc["hin_km"] - bs["hin_km"], 2),
                                 "score": sc["score"] - bs["score"], "calm_pct": sc["calm_pct"] - bs["calm_pct"], "stops": len(stops) - base["summary"]["stops"]}
     tour = {
-        "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe,
+        "id": tid, "mood": mood, "minutes": minutes, "start": start, "safe": safe, "rank": rank, "options": options,
         "origin": {"id": o["id"], "lat": o["lat"], "lng": o["lng"], "street": o["street"], "photo": f"/static/frames/{o['id']}.jpg"},
         "dest_id": END,  # the last stop; the path ends there
         "path": {"type": "LineString", "coordinates": [list(c) for c in coords]},
@@ -178,17 +194,28 @@ def _safe(fn, *a):
         print(f"narrate lookup failed: {e}")
 
 
+_narrate_lock = threading.Lock()  # ponytail: one narration at a time (each read-modify-writes the tour json); per-tour locks if it becomes a bottleneck
+
+
+def narrate_stop(tid, stop_id, lang):
+    """Script + MP3 for this one stop in `lang`, saved on the tour. ElevenLabs is only called if the stop has no audio
+    in `lang` yet, so revisiting a spot is free. Returns the stop; KeyError if the tour or stop doesn't exist."""
+    with _narrate_lock:
+        t = store.get(tid)
+        i, s = next((i, s) for i, s in enumerate(t["stops"]) if s["id"] == stop_id)  # StopIteration -> KeyError below
+        if lang not in s["audio"]:
+            if "place" not in s:
+                s["place"], s["wiki"] = _safe(narrate.place_near, s["lat"], s["lng"]), _safe(narrate.wiki_near, s["lat"], s["lng"])
+            s["script"][lang] = narrate.script(s, lang)
+            f = config.MEDIA / "audio" / f"{tid}-{i}-{lang}.mp3"
+            narrate.tts(s["script"][lang], f)
+            s["audio"][lang] = f"/static/audio/{f.name}"
+            t["summary"]["businesses"] = [x["place"]["name"] for x in t["stops"] if x.get("place")]
+            store.save(t)
+        return s
+
+
 def narrate_tour(tid, lang):
-    """Script + MP3 per stop in `lang`, saved after each stop so a polling client sees progress."""
-    t = store.get(tid)
-    for i, s in enumerate(t["stops"]):
-        if lang in s["audio"]:
-            continue
-        if "place" not in s:
-            s["place"], s["wiki"] = _safe(narrate.place_near, s["lat"], s["lng"]), _safe(narrate.wiki_near, s["lat"], s["lng"])
-        s["script"][lang] = narrate.script(s, lang)
-        f = config.MEDIA / "audio" / f"{tid}-{i}-{lang}.mp3"
-        narrate.tts(s["script"][lang], f)
-        s["audio"][lang] = f"/static/audio/{f.name}"
-        t["summary"]["businesses"] = [x["place"]["name"] for x in t["stops"] if x.get("place")]
-        store.save(t)
+    """Every stop in `lang` (bake / the whole-tour language toggle); saved per stop so a polling client sees progress."""
+    for s in store.get(tid)["stops"]:
+        narrate_stop(tid, s["id"], lang)

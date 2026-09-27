@@ -1,0 +1,5 @@
+# Copy to /etc/caddy/Caddyfile, replace the hostname, then: systemctl reload caddy
+# Caddy fetches and renews the HTTPS certificate on its own once the DNS record points at this droplet.
+api.example.com {
+	reverse_proxy 127.0.0.1:8000
+}

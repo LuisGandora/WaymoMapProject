@@ -24,7 +24,7 @@ def warm_up():
         print(f"warm: graph {G.number_of_nodes()} nodes, safety data {'on' if safety.data()['edges'] else 'OFF (run pipeline.safety)'}")
     except Exception as e:  # missing data files are reported by the endpoints themselves
         print(f"warm-up skipped: {e}")
-app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_origin_regex=config.CORS_ORIGIN_REGEX, allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=config.MEDIA), name="static")
 
 CAN_NARRATE = bool(config.LLM_KEY and config.ELEVEN_KEY and config.ELEVEN_VOICE)
@@ -40,6 +40,7 @@ class RouteReq(BaseModel):
     start_lng: float | None = None
     end_lat: float | None = None  # a destination picked on the map: makes it a one-way tour ending there
     end_lng: float | None = None
+    rank: int = 0  # 0 = the best-ranked route; skipping a suggestion asks for rank+1 (ignored when a destination is picked)
 
 
 def _need_data(fn, *a):
@@ -141,9 +142,11 @@ def segments(bbox: str | None = None):
 
 
 @app.post("/route")
-def route(req: RouteReq, bg: BackgroundTasks):
+def route(req: RouteReq):
     if req.mood not in _need_data(available_moods) or req.start not in _need_data(available_starts) or req.language not in config.LANGS:
         raise HTTPException(400, "that mood or start has no scored blocks yet; GET /config lists what's available")
+    if not 0 <= req.rank < tour.TOP_N:
+        raise HTTPException(400, f"rank must be 0-{tour.TOP_N - 1}")
     if not 1 <= req.minutes <= 90:
         raise HTTPException(400, "minutes must be 1-90")
     at, to = (req.start_lat, req.start_lng), (req.end_lat, req.end_lng)
@@ -155,14 +158,12 @@ def route(req: RouteReq, bg: BackgroundTasks):
         if pt and not graph.polygon().contains(Point(pt[1], pt[0])):
             raise HTTPException(400, f"the {name} point is outside the Waymo service area")
     try:
-        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe, at, to)
+        t = _need_data(tour.build, req.mood, req.minutes, req.start, req.safe, at, to, req.rank)
     except ValueError as e:
         raise HTTPException(422, str(e))
     if not t["stops"]:
         raise HTTPException(422, "no scenic blocks for that mood within reach of the start; try another mood or a longer time budget")
-    if CAN_NARRATE and req.language not in t["stops"][0]["audio"]:
-        bg.add_task(tour.narrate_tour, t["id"], req.language)  # audio appears on GET /tour/{id} as it is made
-    return {"tour_id": t["id"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}
+    return {"tour_id": t["id"], "rank": t["rank"], "options": t["options"], "path": t["path"], "stops": t["stops"], "summary": t["summary"]}
 
 
 @app.get("/weather")
@@ -204,3 +205,21 @@ def narrate_more(tour_id: str, lang: str, bg: BackgroundTasks):
         raise HTTPException(503, "narration keys not configured")
     bg.add_task(tour.narrate_tour, tour_id, lang)
     return {"started": True}
+
+
+@app.post("/tour/{tour_id}/stop/{stop_id}/narrate")
+def narrate_spot(tour_id: str, stop_id: str, lang: str):
+    """Voice for one spot: ElevenLabs is called for this stop only, when the rider reaches it. Cached on the tour, so
+    revisits (and baked demo tours) return the stored audio without any external call."""
+    t = store.get(tour_id)
+    stop = t and next((s for s in t["stops"] if s["id"] == stop_id), None)
+    if lang not in config.LANGS or not stop:
+        raise HTTPException(404, "unknown tour, stop or language")
+    if lang not in stop["audio"]:
+        if not CAN_NARRATE:
+            raise HTTPException(503, "narration keys not configured")
+        try:
+            stop = tour.narrate_stop(tour_id, stop_id, lang)
+        except Exception as e:  # LLM / ElevenLabs down or out of quota: the map keeps working without the voice
+            raise HTTPException(502, f"couldn't narrate this spot: {e}")
+    return {"stop": stop_id, "audio": stop["audio"][lang], "script": stop["script"][lang]}

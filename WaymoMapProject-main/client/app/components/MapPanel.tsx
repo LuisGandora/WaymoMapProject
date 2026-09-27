@@ -1,8 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
-import { highlights, leg, navStops, type LatLng, type Tour } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { highlights, leg, media, narrateSpot, navStops, type LatLng, type Tour } from "../lib/api";
 import type { Story } from "./NarrationPlayer";
 
 const TourMap = dynamic(() => import("./TourMap"), {
@@ -55,6 +55,9 @@ export default function MapPanel({
   onPick,
   story = null,
   cinematic = false,
+  language = "en",
+  spotVoice = false,
+  onSpotPlay,
 }: {
   tour: Tour | null;
   loading: boolean;
@@ -65,6 +68,9 @@ export default function MapPanel({
   onPick: (p: LatLng) => void;
   story?: Story;
   cinematic?: boolean;
+  language?: string;
+  spotVoice?: boolean; // narrate each spot the rider steps to (one ElevenLabs call per spot, via the backend)
+  onSpotPlay?: () => void; // a spot's voice is about to play: the caller stops any other narration
 }) {
   // Step bar: 0 = the start, then each numbered stop, ending on the destination for a one-way tour.
   // Keyed to the tour so a new tour resets it.
@@ -72,6 +78,34 @@ export default function MapPanel({
   const step = at.id === tour?.id ? at.n : null;
   const setStep = (n: number | null) => setAt({ id: tour?.id, n });
   const nav = tour ? navStops(tour) : [];
+  const stopId = step ? nav[step - 1]?.id : undefined; // step 0 is the start pin, which has no spot to narrate
+
+  // Reaching a numbered stop (or the destination) asks the backend for that spot's own script and audio, then plays it.
+  const spotAudio = useRef<HTMLAudioElement | null>(null);
+  const [spot, setSpot] = useState<{ key: string; state: "loading" | "playing" | "ended" | "blocked" | "error"; msg?: string } | null>(null);
+  const spotKey = spotVoice && tour && stopId ? `${tour.id}|${stopId}|${language}` : null;
+  useEffect(() => {
+    if (!spotKey || !tour || !stopId) return;
+    const put = (state: "loading" | "playing" | "ended" | "blocked" | "error", msg?: string) => setSpot({ key: spotKey, state, msg });
+    let stale = false;
+    put("loading");
+    narrateSpot(tour.id, stopId, language)
+      .then((r) => {
+        if (stale) return;
+        const a = new Audio(media(r.audio)!);
+        spotAudio.current = a;
+        a.onended = () => put("ended");
+        onSpotPlay?.();
+        a.play().then(() => put("playing"), () => put("blocked"));
+      })
+      .catch((e) => !stale && put("error", e instanceof Error ? e.message : String(e)));
+    return () => {
+      stale = true;
+      spotAudio.current?.pause();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spotKey covers tour.id, stopId and language; onSpotPlay only stops the intro clip
+  }, [spotKey]);
+  const spotNow = spot && spot.key === spotKey ? spot : null;
   const last = nav.length;
   const startPos = tour ? { lat: tour.path.coordinates[0][1], lng: tour.path.coordinates[0][0] } : null;
   const endPos = tour ? { lat: tour.path.coordinates.at(-1)![1], lng: tour.path.coordinates.at(-1)![0] } : null;
@@ -138,6 +172,18 @@ export default function MapPanel({
           <div className="mt-1.5 text-center text-[12px] text-cyan-300">
             {next ? `Head ${next.dir}, about ${next.km.toFixed(1)} km to ${nav[cur].street || "the next stop"}` : step != null ? "You've arrived" : ""}
           </div>
+          {spotNow && (
+            <div className={`mt-1 flex items-center justify-center gap-2 text-[12px] ${spotNow.state === "error" ? "text-red-300" : "text-slate-300"}`}>
+              {spotNow.state === "loading" && <><span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-cyan-400" />Generating the voice for this spot…</>}
+              {spotNow.state === "playing" && "Narrating this spot"}
+              {spotNow.state === "error" && `No voice for this spot: ${spotNow.msg}`}
+              {(spotNow.state === "blocked" || spotNow.state === "ended") && (
+                <button onClick={() => spotAudio.current?.play().then(() => setSpot({ key: spotNow.key, state: "playing" }))} className="rounded-lg border border-slate-700 px-2.5 py-1 hover:border-cyan-400/60">
+                  {spotNow.state === "ended" ? "▶ Replay" : "▶ Tap to listen"}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
       <div

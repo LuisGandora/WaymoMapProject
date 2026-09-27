@@ -11,6 +11,9 @@ DATA = ROOT / "data"
 MEDIA = DATA / "media"  # frames/*.jpg and audio/*.mp3, served at /static
 AREA = Path(os.getenv("SERVICE_AREA", DATA / "service_area.geojson"))
 GRAPH_FILE = DATA / "graph.graphml"
+# Grow the traced service polygon by this many miles: the street graph, the sampled/scored blocks and the "inside the area"
+# checks all use the grown shape. 0 = exactly the traced polygon. Delete data/graph.graphml after changing it.
+AREA_BUFFER_MILES = float(os.getenv("AREA_BUFFER_MILES", "0"))
 
 
 def has_frame(seg_id) -> bool:
@@ -30,7 +33,8 @@ ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 MONGO_URI = os.getenv("MONGO_URI", "")
 FL511_KEY = os.getenv("FL511_API_KEY", "")  # optional: live closures/incidents for the safety layer
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+CORS_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
+CORS_ORIGIN_REGEX = os.getenv("CORS_ORIGIN_REGEX") or None  # e.g. https://waymo-.*\.vercel\.app for Vercel preview deploys
 # Calibration knob: OSM speeds are free-flow; robotaxis in Miami traffic are slower.
 SPEED_FACTOR = float(os.getenv("SPEED_FACTOR", "0.8"))
 

@@ -1,0 +1,19 @@
+# Copy to /etc/systemd/system/waymo-api.service, fix User and the two paths, then:
+#   systemctl daemon-reload && systemctl enable --now waymo-api
+[Unit]
+Description=Waymo Tour API (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=waymo
+WorkingDirectory=/home/waymo/WaymoMapProject/Server
+# .env is read by app/config.py (python-dotenv); loopback only, Caddy is the public face
+ExecStart=/home/waymo/WaymoMapProject/Server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+# first boot downloads the OSM graph (~20 MB) in warm_up; don't let systemd kill it
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

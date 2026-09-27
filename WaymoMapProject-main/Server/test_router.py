@@ -23,4 +23,12 @@ assert router.top_candidates(segs, ["food"]) == []
 poly = graph.polygon()
 for h, c in config.HOODS.items():
     assert poly.contains(Point(c["start"][1], c["start"][0])), f"{h} start is outside the service polygon"
+
+# 4) skip: ranks 0..N-1 give N different, spread-out destinations, none over budget
+from app import tour
+ds = [tour.build("murals+sunset", 30, "wynwood", rank=r) for r in range(3)]
+assert len({t["dest_id"] for t in ds}) == 3 and all(t["options"] > 1 and t["summary"]["drive_minutes"] <= 30 for t in ds)
+seg = tour.segments()
+assert all(router.haversine_m((seg[a["dest_id"]]["lat"], seg[a["dest_id"]]["lng"]), (seg[b["dest_id"]]["lat"], seg[b["dest_id"]]["lng"])) >= tour.APART_M
+           for i, a in enumerate(ds) for b in ds[i + 1:])
 print("ok")

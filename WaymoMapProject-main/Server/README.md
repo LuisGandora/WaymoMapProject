@@ -126,12 +126,87 @@ Interactive docs at `/docs`.
 
 ## Deploying to the DigitalOcean droplet
 
-1. On the droplet: `apt install python3-venv caddy`, clone the repo, create the venv, `pip install -r requirements.txt`, create `Server/.env`.
-2. Copy `Server/data/media/` from your machine (`rsync -av Server/data/media/ user@droplet:/path/Server/data/media/`) and commit/copy the `data/*.json` files.
-3. Run `uvicorn app.main:app --host 127.0.0.1 --port 8000` under systemd.
-4. Caddy in front for HTTPS (Vercel pages are HTTPS, so browsers block calls to a plain-HTTP API): point `api.<yourdomain>` at the droplet in GoDaddy DNS, then a Caddyfile of `api.<yourdomain> { reverse_proxy localhost:8000 }`.
-5. Set `CORS_ORIGINS` to your Vercel and domain origins.
-6. Mongo Atlas: add the droplet's IP to the Atlas network allowlist, put the URI in `MONGO_URI`.
+Full walkthrough with commands: [`../DIGITALOCEAN.md`](../DIGITALOCEAN.md). In short: an Ubuntu 24.04 droplet, uvicorn under systemd (`deploy/waymo-api.service`), Caddy for HTTPS (`deploy/Caddyfile`), `data/media/` and `graph.graphml` copied over with `scp`, `CORS_ORIGINS` set to your Vercel origins, `NEXT_PUBLIC_API_URL=https://api.<yourdomain>` set in Vercel, and the droplet's IP allowed in Mongo Atlas.
+
+## Expanding the tour area (`AREA_BUFFER_MILES`)
+
+`AREA_BUFFER_MILES` grows the traced Waymo polygon (54 sq mi) in every direction: 1 mile = ~91 sq mi, 3 miles = ~180, 4 miles = ~233, 10 miles = ~680. The street graph, the sampled blocks and the "start/end must be inside the area" check all use the grown shape, and `/service-area` (the map outline) shows it. Stops only exist where a frame has been downloaded **and** scored, so growing the area adds nothing to tours until you run the steps below.
+
+### What it costs
+
+Street pieces (~100 m each) measured from the OSM graph. Only ~600 pieces have frames today.
+
+| Buffer | Pieces in the whole area | Pieces in the new ring only | Images to download for the ring | Cost after the free 10,000 |
+|---|---|---|---|---|
+| 1 mile | 34,370 | 8,826 | up to 8.8k | $0 |
+| 3 miles | 55,163 | 29,619 | up to 29.6k | about $138 |
+| 4 miles | 67,720 | 42,176 | up to 42.2k | about $225 |
+
+- Google Static Street View: the first **10,000 images each month are free**, then $7.00 per 1,000 up to 100,000 (then $5.60). The metadata check the tool runs first is free and unlimited, so spots with no imagery cost nothing; the figures above are upper bounds.
+- Scoring is one LLM call per frame (`LLM_API_KEY`), billed by your LLM provider.
+- Check what you already used this month: Cloud Console -> APIs & Services -> Street View Static API.
+- Size: the 4-mile graph is 32k nodes / 85k edges (~2.5x the traced one) and downloads from OSM in under 3 minutes. 10 miles is several times bigger and untested. A 2 GB droplet is probably fine up to 4 miles; 4 GB is the safe choice.
+
+### Steps (from `Server/`, PowerShell)
+
+The example is the 1-mile ring, which fits in one free month. Needs `GOOGLE_MAPS_API_KEY` and `LLM_API_KEY` in `Server/.env`.
+
+**1. Set the size and rebuild the street graph** (free; a few minutes)
+
+```powershell
+# in Server/.env:  AREA_BUFFER_MILES=1
+del data\graph.graphml
+python -c "from app import graph; graph.build()"
+```
+Writes `data/graph.graphml` for the grown area. Skipping the delete keeps the old graph and finds no new streets.
+
+**2. Sample only the new area** (free; prints the frame count)
+
+```powershell
+python -m pipeline.sample --ring --merge
+```
+Expect: `N points -> data/points.json; M have no frame yet (at most $X ...)`. `--ring` keeps only pieces outside the traced polygon; `--merge` keeps the points you already have (without it `points.json` is replaced and `rollup` would drop every block you scored before). Other choices: `--bbox W S E N --merge` for one box (lng/lat degrees), or `--merge` alone for the whole grown area including the traced part.
+
+**3. Download the frames** (billable after 10,000 images per month)
+
+```powershell
+python -m pipeline.streetview --limit 10000
+```
+Expect: `K points to fetch (of N)...` then `J new frames from K points`. It skips frames already on disk, checks free metadata first, and stops after 10,000 image downloads. If it stops at the limit, rerun next month (or drop `--limit` and pay) to continue; it resumes where it left off.
+
+**4. Score the new frames** (one LLM call each; Ctrl+C is safe, rerun resumes)
+
+```powershell
+python -m pipeline.score
+```
+Expect: `X already scored, Y to go...` then `Z scored frames -> data/frames.json`. Already-scored frames are skipped.
+
+**5. Rebuild what the API reads**
+
+```powershell
+python -m pipeline.rollup      # data/segments.json
+python -m pipeline.matrix      # data/matrix_<mood>.json, one per mood
+del data\tours\*.json          # cached tours keep the old scores; this also deletes baked demo tours (rerun pipeline.bake)
+```
+
+**6. Check it**
+
+```powershell
+python -m pipeline.validate    # its area check compares the traced shape, not the grown one
+python test_router.py          # prints "ok"
+uvicorn app.main:app --reload
+```
+Open `http://localhost:8000/segments` (new blocks appear) and `http://localhost:8000/config` (moods and starts). Optionally rerun `python -m pipeline.safety` so the safety layer covers the bigger area.
+
+**7. Put it on the server** (if deployed; see [`../DIGITALOCEAN.md`](../DIGITALOCEAN.md))
+
+```powershell
+scp Server/data/graph.graphml waymo@<IP>:/home/waymo/WaymoMapProject/Server/data/
+scp -r Server/data/media waymo@<IP>:/home/waymo/WaymoMapProject/Server/data/
+```
+Commit and pull the `data/*.json` files, set the same `AREA_BUFFER_MILES` in the droplet's `.env`, then `sudo systemctl restart waymo-api`.
+
+**Repeat for a bigger area or another month:** change `AREA_BUFFER_MILES`, rerun steps 1-7 (the graph rebuild and `--ring --merge` pick up the new ring; already-downloaded and already-scored frames are never redone).
 
 ## Attribution
 

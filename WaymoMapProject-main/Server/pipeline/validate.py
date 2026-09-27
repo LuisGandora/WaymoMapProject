@@ -13,8 +13,9 @@ BAD = {"motorway", "motorway_link", "trunk", "trunk_link"}
 
 def main():
     poly, G = graph.polygon(), graph.get()
+    traced = graph.polygon(buffered=False)  # the area/centroid checks are about the traced shape, not the grown one
     pts = json.loads((config.DATA / "points.json").read_text(encoding="utf-8"))
-    area, c = graph.area_sq_miles(poly), poly.centroid
+    area, c = graph.area_sq_miles(traced), traced.centroid
     padded = poly.buffer(0.0002)  # ~20 m: truncate_by_edge keeps edges that cross the boundary
     tags = lambda d: d["highway"] if isinstance(d["highway"], list) else [d["highway"]]
     lengths = [p["length_m"] for p in pts]

@@ -29,6 +29,8 @@ export type Tour = {
   frames: Frame[];
   stops: Stop[];
   safe?: boolean;
+  rank?: number; // 0 = best-ranked route; skip asks for rank + 1
+  options?: number; // how many ranked routes exist for these settings (1 when the user picked a destination)
   origin?: { id: string; lat: number; lng: number; street: string; photo: string }; // the photographed street the tour starts on
   dest_id?: string | null; // set for a one-way tour: that stop is the destination
   summary: {
@@ -38,7 +40,7 @@ export type Tour = {
   };
 };
 
-export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean; start_lat?: number; start_lng?: number; end_lat?: number; end_lng?: number };
+export type RouteReq = { mood: string; minutes: number; start: string; language: string; safe?: boolean; start_lat?: number; start_lng?: number; end_lat?: number; end_lng?: number; rank?: number };
 
 export type Safety = {
   score: number; grade: "A" | "B" | "C" | "D"; km: number; hin_km: number; hin_pct: number; arterial_pct: number; calm_pct: number;
@@ -66,6 +68,10 @@ export async function createTour(req: RouteReq): Promise<Tour> {
   const { tour_id } = await j<{ tour_id: string }>(r);
   return getTour(tour_id);
 }
+
+// Voice for one spot: the backend calls ElevenLabs for this stop only (cached after the first time).
+export const narrateSpot = (tourId: string, stopId: string, lang: string) =>
+  fetch(`${API}/tour/${tourId}/stop/${stopId}/narrate?lang=${lang}`, { method: "POST" }).then(j<{ stop: string; audio: string; script: string }>);
 
 export const media = (path: string | null | undefined) => (path ? `${API}${path}` : null);
 

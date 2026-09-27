@@ -33,7 +33,7 @@ class Rating(BaseModel):
 def _where(p):
     return (f" Street: {p.get('street') or '?'}. "
             f"Location: {p.get('lat')},{p.get('lng')}. "
-            f"Heading {p.get('heading', '?')}. Wynwood, Miami.")
+            f"Heading {p.get('heading', '?')}. Miami, Florida.")
 
 
 def _to_rating(data):
