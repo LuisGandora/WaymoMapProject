@@ -1,0 +1,23 @@
+# Render Blueprint for the FastAPI backend (WaymoMapProject-main/Server). The Next.js client is deployed on Vercel.
+# Secrets are sync: false, so Render asks for them in the dashboard and they never live in git.
+services:
+  - type: web
+    name: waymo-tour-api
+    runtime: python
+    plan: free
+    rootDir: WaymoMapProject-main/Server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.2
+      - key: SPEED_FACTOR
+        value: "0.8"
+      # exact Vercel origin(s), comma-separated, e.g. https://waymo-tour.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
