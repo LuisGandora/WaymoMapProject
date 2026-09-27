@@ -30,11 +30,16 @@ def get(tour_id):
     return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
 
 
-def save(tour):
+def save(tour, fresh=False):
+    """Write the JSON file, then mirror to Mongo. fresh=True (a tour just built) also drops narration clips left from a
+    previous build of the same id, since they are keyed by stop position. A Mongo failure only logs: the file is the truth."""
     TOURS.mkdir(parents=True, exist_ok=True)
     (TOURS / f"{tour['id']}.json").write_text(json.dumps(tour, ensure_ascii=False), encoding="utf-8")
     if (c := _coll()) is not None:
-        c.update_one({"_id": tour["id"]}, {"$set": tour}, upsert=True)  # $set, not replace: keeps the mp3 clips already stored
+        try:  # $set, not replace: keeps the mp3 clips already stored
+            c.update_one({"_id": tour["id"]}, {"$set": tour, **({"$unset": {"mp3": ""}} if fresh else {})}, upsert=True)
+        except Exception as e:
+            print(f"store: could not mirror {tour['id']} to Mongo: {e}")
 
 
 def save_audio(tour_id, key, data: bytes):
@@ -46,7 +51,7 @@ def save_audio(tour_id, key, data: bytes):
     if (c := _coll()) is None:
         return
     try:
-        c.update_one({"_id": tour_id}, {"$set": {f"mp3.{key}": data}})
+        c.update_one({"_id": tour_id}, {"$set": {f"mp3.{key}": data}}, upsert=True)  # the tour may exist only as a file so far
     except Exception as e:
         print(f"store: could not keep mp3 {key} for {tour_id} in Mongo: {e}")
 

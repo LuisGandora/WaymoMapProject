@@ -32,7 +32,8 @@ function narrations(): Promise<Collection<Clip> | null> {
       const client = await new MongoClient(uri, { serverSelectionTimeoutMS: 3000 }).connect();
       return client.db(process.env.MONGO_DB || "waymotour").collection<Clip>("narrations");
     } catch (e) {
-      console.error("narrate: Mongo unavailable, caching in memory only:", e instanceof Error ? e.message : e);
+      console.error("narrate: Mongo unavailable, caching in memory only for now:", e instanceof Error ? e.message : e);
+      g.__narrations = undefined; // don't pin the failure: the next request tries to connect again
       return null;
     }
   })();
